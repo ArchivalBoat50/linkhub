@@ -95,26 +95,57 @@ export async function logClick(env: Env, row: ClickRow) {
 export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 30) {
   const since = Date.now() - sinceDays * 24 * 60 * 60 * 1000;
 
-  const [visits, humanVisits, botVisits, uniqueHumans, clicksByLink, deviceSplit, countrySplit, botTypeSplit, referrerSplit, dailySeries] =
-    await Promise.all([
-      env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ?`).bind(pageId, since).first<{ n: number }>(),
-      env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0`).bind(pageId, since).first<{ n: number }>(),
-      env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 1`).bind(pageId, since).first<{ n: number }>(),
-      env.DB.prepare(`SELECT COUNT(DISTINCT visitor_hash) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0`).bind(pageId, since).first<{ n: number }>(),
-      env.DB.prepare(`SELECT link_id, COUNT(*) n FROM link_clicks WHERE page_id = ? AND ts >= ? GROUP BY link_id ORDER BY n DESC`).bind(pageId, since).all<{ link_id: string; n: number }>(),
-      env.DB.prepare(`SELECT device, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 GROUP BY device ORDER BY n DESC`).bind(pageId, since).all<{ device: string; n: number }>(),
-      env.DB.prepare(`SELECT country, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 GROUP BY country ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ country: string; n: number }>(),
-      env.DB.prepare(`SELECT bot_type, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 1 GROUP BY bot_type ORDER BY n DESC`).bind(pageId, since).all<{ bot_type: string; n: number }>(),
-      env.DB.prepare(`SELECT referrer, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 GROUP BY referrer ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ referrer: string; n: number }>(),
-      env.DB.prepare(
-        `SELECT strftime('%Y-%m-%d', datetime(ts/1000, 'unixepoch')) day, COUNT(*) n
-         FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0
-         GROUP BY day ORDER BY day ASC`
-      ).bind(pageId, since).all<{ day: string; n: number }>(),
-    ]);
+  const [
+    visits,
+    humanVisits,
+    botVisits,
+    uniqueHumans,
+    clicksByLink,
+    deviceSplit,
+    countrySplit,
+    botTypeSplit,
+    referrerSplit,
+    visitsByDay,
+    clicksByDay,
+    utmSourceSplit,
+    utmMediumSplit,
+    utmCampaignSplit,
+  ] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ?`).bind(pageId, since).first<{ n: number }>(),
+    env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0`).bind(pageId, since).first<{ n: number }>(),
+    env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 1`).bind(pageId, since).first<{ n: number }>(),
+    env.DB.prepare(`SELECT COUNT(DISTINCT visitor_hash) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0`).bind(pageId, since).first<{ n: number }>(),
+    env.DB.prepare(`SELECT link_id, COUNT(*) n FROM link_clicks WHERE page_id = ? AND ts >= ? GROUP BY link_id ORDER BY n DESC`).bind(pageId, since).all<{ link_id: string; n: number }>(),
+    env.DB.prepare(`SELECT device, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 GROUP BY device ORDER BY n DESC`).bind(pageId, since).all<{ device: string; n: number }>(),
+    env.DB.prepare(`SELECT country, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 GROUP BY country ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ country: string; n: number }>(),
+    env.DB.prepare(`SELECT bot_type, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 1 GROUP BY bot_type ORDER BY n DESC`).bind(pageId, since).all<{ bot_type: string; n: number }>(),
+    env.DB.prepare(`SELECT referrer, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 GROUP BY referrer ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ referrer: string; n: number }>(),
+    // Per-day visit rollup: human, unique-human, and bot counts in one pass.
+    env.DB.prepare(
+      `SELECT strftime('%Y-%m-%d', datetime(ts/1000, 'unixepoch')) day,
+              SUM(CASE WHEN is_bot = 0 THEN 1 ELSE 0 END) humans,
+              COUNT(DISTINCT CASE WHEN is_bot = 0 THEN visitor_hash END) uniques,
+              SUM(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) bots
+       FROM page_visits WHERE page_id = ? AND ts >= ?
+       GROUP BY day ORDER BY day ASC`
+    ).bind(pageId, since).all<{ day: string; humans: number; uniques: number; bots: number }>(),
+    // Per-day click rollup, joined to the visit series by day below.
+    env.DB.prepare(
+      `SELECT strftime('%Y-%m-%d', datetime(ts/1000, 'unixepoch')) day, COUNT(*) clicks
+       FROM link_clicks WHERE page_id = ? AND ts >= ?
+       GROUP BY day ORDER BY day ASC`
+    ).bind(pageId, since).all<{ day: string; clicks: number }>(),
+    env.DB.prepare(`SELECT utm_source, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND utm_source IS NOT NULL GROUP BY utm_source ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ utm_source: string; n: number }>(),
+    env.DB.prepare(`SELECT utm_medium, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND utm_medium IS NOT NULL GROUP BY utm_medium ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ utm_medium: string; n: number }>(),
+    env.DB.prepare(`SELECT utm_campaign, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND utm_campaign IS NOT NULL GROUP BY utm_campaign ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ utm_campaign: string; n: number }>(),
+  ]);
 
   const totalClicks = clicksByLink.results.reduce((a, r) => a + r.n, 0);
   const humanN = humanVisits?.n ?? 0;
+
+  // Merge the two per-day rollups into one gap-filled series so the charts get
+  // a continuous point per calendar day in the window (missing days -> zeros).
+  const dailySeries = buildDailySeries(since, visitsByDay.results, clicksByDay.results);
 
   return {
     pageId,
@@ -130,6 +161,52 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
     countrySplit: countrySplit.results,
     botTypeSplit: botTypeSplit.results,
     referrerSplit: referrerSplit.results,
-    dailySeries: dailySeries.results,
+    utmSourceSplit: utmSourceSplit.results,
+    utmMediumSplit: utmMediumSplit.results,
+    utmCampaignSplit: utmCampaignSplit.results,
+    dailySeries,
   };
+}
+
+export interface DailyPoint {
+  day: string;
+  humans: number;
+  uniques: number;
+  bots: number;
+  clicks: number;
+  ctr: number; // clicks / humans * 100, rounded to 1 dp; 0 when no human visits
+}
+
+// Produce one point per calendar day from `since` to today (UTC), joining the
+// visit and click rollups and filling any day with no rows as zeros. A
+// continuous series is what lets the dashboard draw a gap-free line chart.
+function buildDailySeries(
+  since: number,
+  visitsByDay: { day: string; humans: number; uniques: number; bots: number }[],
+  clicksByDay: { day: string; clicks: number }[]
+): DailyPoint[] {
+  const visitMap = new Map(visitsByDay.map((r) => [r.day, r]));
+  const clickMap = new Map(clicksByDay.map((r) => [r.day, r.clicks]));
+
+  const out: DailyPoint[] = [];
+  const start = new Date(since);
+  start.setUTCHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  for (let d = start; d <= today; d.setUTCDate(d.getUTCDate() + 1)) {
+    const day = d.toISOString().slice(0, 10);
+    const v = visitMap.get(day);
+    const humans = v?.humans ?? 0;
+    const clicks = clickMap.get(day) ?? 0;
+    out.push({
+      day,
+      humans,
+      uniques: v?.uniques ?? 0,
+      bots: v?.bots ?? 0,
+      clicks,
+      ctr: humans > 0 ? +((clicks / humans) * 100).toFixed(1) : 0,
+    });
+  }
+  return out;
 }

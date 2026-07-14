@@ -1,0 +1,20 @@
+name = "linkhub"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+
+# One Worker deploy = one model's page for now (per-model deploy, per your call).
+# When you go multi-tenant later, this same schema already supports it —
+# just add a router keyed on hostname/path and stop hardcoding PAGE_ID.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "linkhub-db"
+database_id = "e09a9f33-0d7a-40c6-9be3-9a5018cdbfa2"  # `wrangler d1 create linkhub-db` then paste the id here
+
+[vars]
+PAGE_ID = "model-1"          # unique slug for this model's page, used as the analytics partition key
+MODEL_NAME = "Your Model"    # shown in OG tags for the bot-safe page
+
+# Secrets — set with `wrangler secret put <NAME>`, do not put real values here:
+#   DASHBOARD_TOKEN   -> bearer token to view /dashboard and /api/analytics
+#   VISITOR_SALT      -> random string used to hash IPs for unique-visitor counts (never store raw IPs)

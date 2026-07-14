@@ -1,0 +1,266 @@
+import { PageConfig, LinkItem } from "./config";
+
+// Shared design tokens.
+// Direction: a "VIP access pass" — deep aubergine ground, warm gold + dusty
+// mauve accents, serif display paired with a geometric sans. Deliberately
+// not the cream/terracotta or near-black/neon defaults.
+const STYLE = `
+  :root {
+    --bg: #241220;
+    --bg-card: #2E1826;
+    --text: #F5EFE6;
+    --text-dim: #C9BDB4;
+    --gold: #C9A15A;
+    --mauve: #C97A94;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(120% 100% at 50% -10%, #34192C 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+    min-height: 100svh;
+    display: flex;
+    justify-content: center;
+    padding: 32px 18px 48px;
+  }
+  /* Optional full-bleed background image (human page only). Sits behind a
+     dark scrim so text stays readable over any photo. */
+  body.has-bg::before {
+    content: ""; position: fixed; inset: 0; z-index: -2;
+    background-size: cover; background-position: center;
+    background-image: var(--bg-image);
+  }
+  body.has-bg::after {
+    content: ""; position: fixed; inset: 0; z-index: -1;
+    background: linear-gradient(180deg, rgba(20,10,17,0.55), rgba(20,10,17,0.82));
+  }
+  .card { width: 100%; max-width: 420px; }
+  .avatar {
+    width: 96px; height: 96px; border-radius: 50%;
+    margin: 0 auto 18px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(155deg, var(--gold), var(--mauve));
+    font-family: 'Fraunces', Georgia, serif; font-size: 32px; font-weight: 600; color: var(--bg);
+    box-shadow: 0 0 0 3px rgba(201,161,90,0.25), 0 12px 30px -12px rgba(0,0,0,0.6);
+    overflow: hidden;
+  }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  /* Empty placeholder styling used when no image is set yet (matches the
+     "empty picture placeholder" look). */
+  .avatar.placeholder {
+    background: repeating-linear-gradient(45deg, #3a2130, #3a2130 10px, #331c2a 10px, #331c2a 20px);
+    color: var(--text-dim); font-size: 12px; font-family: 'Manrope', sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .bg-placeholder-note {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.55); color: #fff; font-size: 10px; padding: 4px 10px;
+    border-radius: 6px; z-index: 5; letter-spacing: 0.3px;
+  }
+  h1 {
+    font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 26px;
+    text-align: center; margin: 0 0 4px; letter-spacing: 0.2px;
+  }
+  .handle { text-align: center; color: var(--gold); font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+  .tagline { text-align: center; color: var(--text-dim); font-size: 14px; margin: 0 0 30px; line-height: 1.5; }
+  .links { display: flex; flex-direction: column; gap: 14px; }
+  .link-card {
+    position: relative;
+    display: flex; align-items: center; gap: 14px;
+    background: var(--bg-card);
+    border: 1px solid rgba(201,161,90,0.18);
+    border-radius: 14px;
+    padding: 16px 20px 16px 26px;
+    text-decoration: none; color: var(--text);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .link-card::before, .link-card::after {
+    content: ""; position: absolute; left: -8px; width: 16px; height: 16px;
+    background: var(--bg); border-radius: 50%;
+  }
+  .link-card::before { top: -8px; }
+  .link-card::after { bottom: -8px; }
+  .link-icon {
+    width: 34px; height: 34px; border-radius: 50%; flex: none;
+    background: rgba(201,161,90,0.12);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--gold);
+    overflow: hidden;
+  }
+  .link-icon img { width: 20px; height: 20px; object-fit: contain; border-radius: 4px; }
+  .link-label { font-size: 15px; font-weight: 600; flex: 1; }
+  .link-arrow { color: var(--text-dim); font-size: 18px; }
+  .foot { text-align: center; margin-top: 34px; color: var(--text-dim); font-size: 11px; letter-spacing: 0.4px; }
+`;
+
+const FONT_LINK = `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">`;
+
+function iconSvg(kind: string): string {
+  switch (kind) {
+    case "vip":
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l4 3 5-6 5 6 4-3-2 11H5L3 8z"/></svg>`;
+    case "instagram":
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.6" fill="currentColor"/></svg>`;
+    case "telegram":
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 3L2 11l6 2 2 6 3-4 5 3 3-15z"/></svg>`;
+    case "x":
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16M20 4L4 20"/></svg>`;
+    case "tiktok":
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a4 4 0 1 0 4 4V4c1 2 2.5 3 5 3"/></svg>`;
+    case "youtube":
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="M10 9l5 3-5 3z" fill="currentColor"/></svg>`;
+    default:
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>`;
+  }
+}
+
+// Decide what goes inside a card's logo circle.
+// Priority: explicit logoUrl > built-in icon glyph > server-side favicon.
+// IMPORTANT: for the favicon fallback we point at /icon/<id> on THIS worker,
+// never at a URL containing the real destination domain — otherwise the
+// destination (e.g. destination.example) would leak into the page HTML. The worker
+// resolves the real favicon server-side, human-gated, in the /icon route.
+function cardLogoHtml(l: LinkItem, forBot: boolean): string {
+  if (l.logoUrl) {
+    return `<img src="${escapeAttr(l.logoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+  }
+  if (l.icon) {
+    return iconSvg(l.icon);
+  }
+  const faviconOn = l.faviconFallback !== false; // default true
+  if (faviconOn && !forBot) {
+    // Human page only. Bot page must never emit /icon/<id> (it would let a
+    // crawler resolve the favicon and thus the domain), so bots get a glyph.
+    return `<img src="/icon/${encodeURIComponent(l.id)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createRange().createContextualFragment(${JSON.stringify(iconSvg("generic"))}))">`;
+  }
+  return iconSvg("generic");
+}
+
+function avatarHtml(cfg: PageConfig, forBot: boolean): string {
+  // Bot page NEVER shows the real profile photo — initials only, always SFW.
+  if (!forBot && cfg.avatarUrl) {
+    return `<div class="avatar"><img src="${escapeAttr(cfg.avatarUrl)}" alt="${escapeAttr(cfg.modelName)}" referrerpolicy="no-referrer"></div>`;
+  }
+  if (cfg.avatarInitials) {
+    return `<div class="avatar">${escapeHtml(cfg.avatarInitials)}</div>`;
+  }
+  // Empty placeholder (matches the "empty picture placeholder" requirement).
+  return `<div class="avatar placeholder">Photo</div>`;
+}
+
+/**
+ * Bot / crawler render: fully static, no JS, no real destination URLs, no
+ * /icon or /go references, no real profile photo, no background image.
+ * Just a clean, complete, legitimate-looking page.
+ */
+export function renderBotPage(cfg: PageConfig, canonicalUrl: string): string {
+  const linksHtml = cfg.links
+    .map(
+      (l) => `
+      <div class="link-card">
+        <div class="link-icon">${cardLogoHtml(l, true)}</div>
+        <div class="link-label">${escapeHtml(l.label)}</div>
+      </div>`
+    )
+    .join("");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(cfg.modelName)}</title>
+<meta name="description" content="${escapeAttr(cfg.ogDescription)}">
+<meta property="og:title" content="${escapeAttr(cfg.modelName)}">
+<meta property="og:description" content="${escapeAttr(cfg.ogDescription)}">
+<meta property="og:type" content="profile">
+<meta property="og:url" content="${escapeAttr(canonicalUrl)}">
+<meta name="robots" content="index, follow">
+${FONT_LINK}
+<style>${STYLE}</style>
+</head>
+<body>
+  <div class="card">
+    ${avatarHtml(cfg, true)}
+    <h1>${escapeHtml(cfg.modelName)}</h1>
+    <p class="handle">${escapeHtml(cfg.handle)}</p>
+    <p class="tagline">${escapeHtml(cfg.tagline)}</p>
+    <div class="links">${linksHtml}</div>
+    <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.modelName)}</p>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Human render: real destination URLs are NEVER placed in this HTML. Each
+ * link points at a relative /go/<id> path; favicons load via /icon/<id>.
+ * Both are re-classified server-side. Profile photo + background image are
+ * shown here (human only). See ARCHITECTURE.md §2.
+ */
+export function renderHumanPage(cfg: PageConfig, pageId: string): string {
+  const linksHtml = cfg.links
+    .map(
+      (l) => `
+      <a class="link-card" href="/go/${encodeURIComponent(l.id)}" rel="noopener nofollow" data-link-id="${escapeAttr(l.id)}">
+        <div class="link-icon">${cardLogoHtml(l, false)}</div>
+        <div class="link-label">${escapeHtml(l.label)}</div>
+        <div class="link-arrow">&#8594;</div>
+      </a>`
+    )
+    .join("");
+
+  const hasBg = !!cfg.backgroundUrl;
+  const bodyClass = hasBg ? ' class="has-bg"' : "";
+  const bgStyle = hasBg ? ` style="--bg-image:url('${escapeAttr(cfg.backgroundUrl!)}')"` : "";
+  // If a background is expected but empty, show a subtle placeholder note so
+  // you can see where it goes during testing.
+  const bgPlaceholder = cfg.backgroundUrl === "" && "backgroundUrl" in cfg
+    ? "" // keep quiet by default; flip to a note if you want a visible marker
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(cfg.modelName)}</title>
+${FONT_LINK}
+<style>${STYLE}</style>
+</head>
+<body${bodyClass}${bgStyle}>
+  ${bgPlaceholder}
+  <div class="card">
+    ${avatarHtml(cfg, false)}
+    <h1>${escapeHtml(cfg.modelName)}</h1>
+    <p class="handle">${escapeHtml(cfg.handle)}</p>
+    <p class="tagline">${escapeHtml(cfg.tagline)}</p>
+    <div class="links" id="links">${linksHtml}</div>
+    <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.modelName)}</p>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Safe bounce shown when a crawler/scraper hits /go/<id>. No real destination.
+ */
+export function renderBounce(): string {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=/">
+<meta name="robots" content="noindex">
+<title>Redirecting</title>
+</head><body></body></html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+}
+
+// For attribute values (URLs etc.) — same escaping is safe for our use.
+function escapeAttr(s: string): string {
+  return escapeHtml(s);
+}

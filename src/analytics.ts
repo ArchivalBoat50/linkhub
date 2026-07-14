@@ -110,6 +110,9 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
     utmSourceSplit,
     utmMediumSplit,
     utmCampaignSplit,
+    trafficSources,
+    hourly,
+    igWebviewVisits,
   ] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ?`).bind(pageId, since).first<{ n: number }>(),
     env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0`).bind(pageId, since).first<{ n: number }>(),
@@ -138,6 +141,32 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
     env.DB.prepare(`SELECT utm_source, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND utm_source IS NOT NULL GROUP BY utm_source ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ utm_source: string; n: number }>(),
     env.DB.prepare(`SELECT utm_medium, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND utm_medium IS NOT NULL GROUP BY utm_medium ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ utm_medium: string; n: number }>(),
     env.DB.prepare(`SELECT utm_campaign, COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND utm_campaign IS NOT NULL GROUP BY utm_campaign ORDER BY n DESC LIMIT 10`).bind(pageId, since).all<{ utm_campaign: string; n: number }>(),
+    // Unified traffic source: utm_source wins; otherwise derive a platform from
+    // the referrer host; otherwise "direct". This is the "where did they come
+    // from" view — no third-party pixel, just UTMs + referrer we already log.
+    env.DB.prepare(
+      `SELECT COALESCE(utm_source, CASE
+          WHEN referrer IS NULL OR referrer = '' THEN 'direct'
+          WHEN referrer LIKE '%instagram.com%' THEN 'instagram'
+          WHEN referrer LIKE '%t.co%' OR referrer LIKE '%twitter.com%' OR referrer LIKE '%//x.com%' THEN 'twitter/x'
+          WHEN referrer LIKE '%tiktok.com%' THEN 'tiktok'
+          WHEN referrer LIKE '%facebook.com%' OR referrer LIKE '%fb.com%' THEN 'facebook'
+          WHEN referrer LIKE '%youtube.com%' OR referrer LIKE '%youtu.be%' THEN 'youtube'
+          WHEN referrer LIKE '%reddit.com%' THEN 'reddit'
+          WHEN referrer LIKE '%google.%' THEN 'google'
+          ELSE 'other'
+        END) source, COUNT(*) n
+       FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0
+       GROUP BY source ORDER BY n DESC LIMIT 12`
+    ).bind(pageId, since).all<{ source: string; n: number }>(),
+    // Hour-of-day histogram (UTC) for human visits — when your audience shows up.
+    env.DB.prepare(
+      `SELECT CAST(strftime('%H', datetime(ts/1000, 'unixepoch')) AS INTEGER) hour, COUNT(*) n
+       FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0
+       GROUP BY hour ORDER BY hour ASC`
+    ).bind(pageId, since).all<{ hour: number; n: number }>(),
+    // Share of human visits that came from inside the Instagram in-app browser.
+    env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND is_ig_webview = 1`).bind(pageId, since).first<{ n: number }>(),
   ]);
 
   const totalClicks = clicksByLink.results.reduce((a, r) => a + r.n, 0);
@@ -146,6 +175,12 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
   // Merge the two per-day rollups into one gap-filled series so the charts get
   // a continuous point per calendar day in the window (missing days -> zeros).
   const dailySeries = buildDailySeries(since, visitsByDay.results, clicksByDay.results);
+
+  // Fill hours 0-23 so the histogram always has 24 columns even with sparse data.
+  const hourMap = new Map(hourly.results.map((r) => [r.hour, r.n]));
+  const hourly24 = Array.from({ length: 24 }, (_, h) => ({ hour: h, n: hourMap.get(h) ?? 0 }));
+
+  const igN = igWebviewVisits?.n ?? 0;
 
   return {
     pageId,
@@ -156,14 +191,18 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
     uniqueHumanVisitors: uniqueHumans?.n ?? 0,
     totalClicks,
     clickThroughRate: humanN > 0 ? +(totalClicks / humanN * 100).toFixed(1) : 0,
+    igWebviewVisits: igN,
+    igSharePct: humanN > 0 ? +((igN / humanN) * 100).toFixed(1) : 0,
     clicksByLink: clicksByLink.results,
     deviceSplit: deviceSplit.results,
     countrySplit: countrySplit.results,
     botTypeSplit: botTypeSplit.results,
     referrerSplit: referrerSplit.results,
+    trafficSources: trafficSources.results,
     utmSourceSplit: utmSourceSplit.results,
     utmMediumSplit: utmMediumSplit.results,
     utmCampaignSplit: utmCampaignSplit.results,
+    hourly: hourly24,
     dailySeries,
   };
 }

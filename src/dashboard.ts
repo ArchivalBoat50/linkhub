@@ -99,6 +99,27 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
     </div>
 
     <div class="panel">
+      <h2>Traffic sources <span class="hint">UTM source, else referrer</span></h2>
+      <div id="trafficSources"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2>When visitors arrive <span class="hint">by hour, UTC</span></h2>
+        <div class="chart-wrap"><div id="hourly"></div></div>
+      </div>
+      <div class="panel">
+        <h2>From inside Instagram <span class="hint">in-app browser share</span></h2>
+        <div id="igShare"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Crawler pressure over time <span class="hint">rising = your domain is being scraped more</span></h2>
+      <div class="chart-wrap"><div id="crawlerTrend"></div></div>
+    </div>
+
+    <div class="panel">
       <h2>Clicks by link</h2>
       <div id="clicksByLink"></div>
     </div>
@@ -165,6 +186,24 @@ function splitBar(container, humans, bots) {
     '<div class="split-key">' +
       '<span><span class="sw" style="background:var(--s-visits)"></span>Humans ' + humans + '</span>' +
       '<span><span class="sw" style="background:var(--s-bots)"></span>Crawlers ' + bots + '</span>' +
+    '</div>';
+}
+
+// ---- Instagram in-app share (of human visits) ----
+function igSplit(container, ig, humans, pct) {
+  if (!humans) { container.innerHTML = '<p class="sub">No data yet</p>'; return; }
+  var other = Math.max(0, humans - ig);
+  var igp = (ig / humans) * 100, op = 100 - igp;
+  container.innerHTML =
+    '<div style="font-size:22px;font-weight:700;margin-bottom:2px;">' + pct + '%</div>' +
+    '<div class="l" style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:12px;">of visits from the IG app</div>' +
+    '<div class="split-bar">' +
+      (igp > 0 ? '<div class="split-seg" style="width:' + igp + '%;background:var(--s-unique)">' + (igp >= 12 ? Math.round(igp) + '%' : '') + '</div>' : '') +
+      (op > 0 ? '<div class="split-seg" style="width:' + op + '%;background:rgba(255,255,255,0.12);color:var(--text)">' + (op >= 12 ? Math.round(op) + '%' : '') + '</div>' : '') +
+    '</div>' +
+    '<div class="split-key">' +
+      '<span><span class="sw" style="background:var(--s-unique)"></span>Instagram app ' + ig + '</span>' +
+      '<span><span class="sw" style="background:rgba(255,255,255,0.2)"></span>Other ' + other + '</span>' +
     '</div>';
 }
 
@@ -299,6 +338,61 @@ function lineChart(mountId, labels, series, opts) {
   }
 }
 
+// ---- compact SVG column chart (hour-of-day histogram) ----
+// values aligned to labels[]; single-series so one theme color, per-column
+// hover tooltip. barLabel(i) returns the tooltip label for column i.
+function columnChart(mountId, values, opts) {
+  opts = opts || {};
+  var mount = document.getElementById(mountId);
+  var tooltip = document.getElementById('tooltip');
+  if (!values || !values.length || Math.max.apply(null, values) === 0) {
+    mount.innerHTML = '<p class="sub">No data yet</p>';
+    return;
+  }
+  var W = 720, H = 180, mL = 28, mR = 8, mT = 10, mB = 22;
+  var plotW = W - mL - mR, plotH = H - mT - mB;
+  var n = values.length;
+  var max = Math.max.apply(null, values);
+  var step = Math.pow(10, Math.floor(Math.log10(max)));
+  max = Math.ceil(max / step) * step;
+  var gap = 2, cw = plotW / n;
+
+  var svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
+  svg += '<g class="grid">';
+  for (var g = 0; g <= 2; g++) {
+    var gy = mT + (plotH / 2) * g;
+    svg += '<line x1="' + mL + '" y1="' + gy + '" x2="' + (mL + plotW) + '" y2="' + gy + '"/>';
+  }
+  svg += '</g><g class="axis">';
+  for (var g2 = 0; g2 <= 2; g2++) {
+    var val = max - (max / 2) * g2;
+    svg += '<text x="' + (mL - 5) + '" y="' + (mT + (plotH / 2) * g2 + 3) + '" text-anchor="end">' + Math.round(val) + '</text>';
+  }
+  for (var t = 0; t < n; t += opts.labelEvery || 1) {
+    svg += '<text x="' + (mL + cw * t + cw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">' + (opts.tick ? opts.tick(t) : t) + '</text>';
+  }
+  svg += '</g>';
+  for (var i = 0; i < n; i++) {
+    var h = (values[i] / max) * plotH;
+    var x = mL + cw * i + gap / 2, y = mT + plotH - h;
+    svg += '<rect class="col" data-i="' + i + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + (cw - gap).toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" rx="2" fill="var(--accent)"/>';
+  }
+  svg += '</svg>';
+  mount.innerHTML = svg;
+
+  mount.querySelectorAll('rect.col').forEach(function (r) {
+    r.addEventListener('mousemove', function (evt) {
+      var i = +r.getAttribute('data-i');
+      r.style.opacity = '0.8';
+      tooltip.innerHTML = '<div class="tt-row"><span class="k">' + (opts.barLabel ? opts.barLabel(i) : i) + '</span><b>' + values[i] + '</b></div>';
+      tooltip.style.display = 'block';
+      tooltip.style.left = Math.min(evt.clientX + 14, window.innerWidth - 140) + 'px';
+      tooltip.style.top = (evt.clientY + 14) + 'px';
+    });
+    r.addEventListener('mouseleave', function () { r.style.opacity = '1'; tooltip.style.display = 'none'; });
+  });
+}
+
 function pluck(series, field) {
   return series.map(function (p) { return p[field]; });
 }
@@ -336,6 +430,24 @@ function load() {
     ], { format: function (v) { return v + '%'; } });
 
     splitBar(document.getElementById('splitBar'), d.humanVisits, d.botVisits);
+
+    // traffic sources (unified: UTM source, else referrer-derived platform)
+    bars(document.getElementById('trafficSources'), d.trafficSources, 'source');
+
+    // hour-of-day histogram
+    columnChart('hourly', pluck(d.hourly || [], 'n'), {
+      labelEvery: 3,
+      tick: function (h) { return (h < 10 ? '0' + h : h) + ''; },
+      barLabel: function (h) { return (h < 10 ? '0' + h : h) + ':00 UTC'; }
+    });
+
+    // Instagram in-app share (of human visits)
+    igSplit(document.getElementById('igShare'), d.igWebviewVisits, d.humanVisits, d.igSharePct);
+
+    // crawler pressure over time (single series, reuses the daily bots rollup)
+    lineChart('crawlerTrend', labels, [
+      { key: 'bots', label: 'Crawler hits', color: 'var(--s-bots)', values: pluck(s, 'bots') }
+    ], {});
 
     bars(document.getElementById('clicksByLink'), d.clicksByLink, 'link_id');
     bars(document.getElementById('deviceSplit'), d.deviceSplit, 'device');

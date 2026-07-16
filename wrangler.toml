@@ -26,6 +26,6 @@ MODEL_NAME = "Ana"          # shown in OG tags for the bot-safe page
 #   1. wrangler r2 bucket create linkhub-media
 #   2. uncomment the binding below and redeploy
 # Uploaded objects are served same-origin at /media/<key> (see src/index.ts).
-# [[r2_buckets]]
-# binding = "MEDIA"
-# bucket_name = "linkhub-media"
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "linkhub-media"

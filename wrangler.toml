@@ -17,4 +17,15 @@ MODEL_NAME = "Ana"          # shown in OG tags for the bot-safe page
 
 # Secrets — set with `wrangler secret put <NAME>`, do not put real values here:
 #   DASHBOARD_TOKEN   -> bearer token to view /dashboard and /api/analytics
+#   ADMIN_TOKEN       -> bearer token to edit the page at /admin (and /api/admin/*)
 #   VISITOR_SALT      -> random string used to hash IPs for unique-visitor counts (never store raw IPs)
+
+# Optional R2 bucket for admin image uploads (avatar / background / link logos).
+# Without it, /admin still works — you just paste hosted image URLs instead of
+# uploading. To enable uploads:
+#   1. wrangler r2 bucket create linkhub-media
+#   2. uncomment the binding below and redeploy
+# Uploaded objects are served same-origin at /media/<key> (see src/index.ts).
+# [[r2_buckets]]
+# binding = "MEDIA"
+# bucket_name = "linkhub-media"

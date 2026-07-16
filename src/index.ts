@@ -1,7 +1,8 @@
-import { pageConfig } from "./config";
 import { classifyRequest, deviceFromUA, browserFromUA, ClassifyOpts } from "./bot-detect";
 import { renderBotPage, renderHumanPage, renderBounce } from "./render";
 import { renderDashboardShell } from "./dashboard";
+import { renderAdminShell } from "./admin";
+import { loadPageConfig, savePageConfig, ConfigValidationError } from "./page-store";
 import { Env, hashVisitor, parseUTM, logVisit, logClick, getAnalyticsSummary } from "./analytics";
 
 // A request is "local dev" when it's coming through `wrangler dev`, where
@@ -38,6 +39,20 @@ export default {
     if (path === "/api/analytics") {
       return handleAnalytics(request, env);
     }
+    if (path === "/admin") {
+      return new Response(renderAdminShell(env.PAGE_ID, env.MODEL_NAME), {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+    if (path === "/api/admin/config") {
+      return handleAdminConfig(request, env);
+    }
+    if (path === "/api/admin/upload") {
+      return handleAdminUpload(request, env);
+    }
+    if (path.startsWith("/media/")) {
+      return handleMedia(request, env, url);
+    }
     if (path === "/favicon.ico") {
       // No favicon; 204 keeps it out of the logs and off the 404 path.
       return new Response(null, { status: 204 });
@@ -65,7 +80,10 @@ function extractCtx(request: Request, url: URL) {
 async function handleIndex(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
   const cls = classifyRequest(request, classifyOpts(request));
   const c = extractCtx(request, url);
-  const visitorHash = await hashVisitor(c.ip, env.VISITOR_SALT || "dev-salt");
+  const [pageConfig, visitorHash] = await Promise.all([
+    loadPageConfig(env, env.PAGE_ID),
+    hashVisitor(c.ip, env.VISITOR_SALT || "dev-salt"),
+  ]);
 
   const isBot = cls.kind !== "human";
   const botType = cls.kind === "meta_crawler" || cls.kind === "generic_bot" ? cls.botType : null;
@@ -110,6 +128,7 @@ async function handleIndex(request: Request, env: Env, ctx: ExecutionContext, ur
 // time, and only for classified-human requests. Everyone else gets a bounce.
 async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
   const linkId = decodeURIComponent(url.pathname.slice("/go/".length));
+  const pageConfig = await loadPageConfig(env, env.PAGE_ID);
   const link = pageConfig.links.find((l) => l.id === linkId);
 
   // Unknown id -> behave like a normal not-found, no information leak.
@@ -161,6 +180,7 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
 // reveals the destination.
 async function handleIcon(request: Request, env: Env, url: URL): Promise<Response> {
   const linkId = decodeURIComponent(url.pathname.slice("/icon/".length));
+  const pageConfig = await loadPageConfig(env, env.PAGE_ID);
   const link = pageConfig.links.find((l) => l.id === linkId);
 
   const cls = classifyRequest(request, classifyOpts(request));
@@ -239,14 +259,24 @@ function handleRobots(): Response {
   });
 }
 
-async function handleAnalytics(request: Request, env: Env): Promise<Response> {
+// Bearer-token check against a specific secret. Returns true only when the
+// secret is set AND matches. Used by both the dashboard and admin surfaces.
+function checkBearer(request: Request, secret: string | undefined): boolean {
   const auth = request.headers.get("Authorization") || "";
   const token = auth.replace(/^Bearer\s+/i, "");
-  if (!env.DASHBOARD_TOKEN || !timingSafeEqual(token, env.DASHBOARD_TOKEN)) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), {
-      status: 401,
-      headers: { "content-type": "application/json", "cache-control": "no-store" },
-    });
+  return !!secret && timingSafeEqual(token, secret);
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+async function handleAnalytics(request: Request, env: Env): Promise<Response> {
+  if (!checkBearer(request, env.DASHBOARD_TOKEN)) {
+    return jsonResponse({ error: "unauthorized" }, 401);
   }
 
   const url = new URL(request.url);
@@ -259,6 +289,83 @@ async function handleAnalytics(request: Request, env: Env): Promise<Response> {
   });
 }
 
+// GET  -> return the current page config to the authenticated owner (this is
+//         the one client-readable place destination URLs legitimately appear,
+//         because the caller proved they hold ADMIN_TOKEN).
+// PUT  -> validate + persist a new config, bust the cache. See page-store.ts.
+async function handleAdminConfig(request: Request, env: Env): Promise<Response> {
+  if (!checkBearer(request, env.ADMIN_TOKEN)) {
+    return jsonResponse({ error: "unauthorized" }, 401);
+  }
+
+  if (request.method === "GET") {
+    const cfg = await loadPageConfig(env, env.PAGE_ID);
+    return jsonResponse(cfg);
+  }
+
+  if (request.method === "PUT") {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    try {
+      const saved = await savePageConfig(env, env.PAGE_ID, body);
+      return jsonResponse(saved);
+    } catch (e) {
+      if (e instanceof ConfigValidationError) return jsonResponse({ error: e.message }, 400);
+      return jsonResponse({ error: "save failed" }, 500);
+    }
+  }
+
+  return jsonResponse({ error: "method not allowed" }, 405);
+}
+
+// Accepts a raw image body (Content-Type = the image's type) and stores it in
+// R2, returning a same-origin /media/<key> path. Requires the MEDIA binding;
+// without it, admins paste hosted URLs instead. Size-capped to keep an authed
+// but careless upload from writing an unbounded object.
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+async function handleAdminUpload(request: Request, env: Env): Promise<Response> {
+  if (!checkBearer(request, env.ADMIN_TOKEN)) {
+    return jsonResponse({ error: "unauthorized" }, 401);
+  }
+  if (request.method !== "POST") return jsonResponse({ error: "method not allowed" }, 405);
+  if (!env.MEDIA) return jsonResponse({ error: "R2 not configured — bind a MEDIA bucket or paste a hosted URL instead" }, 501);
+
+  const contentType = request.headers.get("content-type") || "application/octet-stream";
+  if (!contentType.startsWith("image/")) return jsonResponse({ error: "only image uploads are allowed" }, 415);
+
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength === 0) return jsonResponse({ error: "empty upload" }, 400);
+  if (buf.byteLength > MAX_UPLOAD_BYTES) return jsonResponse({ error: "file too large (max 5 MB)" }, 413);
+
+  const ext = extForContentType(contentType);
+  const key = `${crypto.randomUUID()}${ext}`;
+  await env.MEDIA.put(key, buf, { httpMetadata: { contentType } });
+
+  return jsonResponse({ url: `/media/${key}` });
+}
+
+// Serves an uploaded image from R2. Public (avatars/backgrounds are shown to
+// every human visitor anyway) and long-cached; keys are unguessable UUIDs.
+async function handleMedia(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!env.MEDIA) return new Response("Not found", { status: 404 });
+  const key = decodeURIComponent(url.pathname.slice("/media/".length));
+  // Keys we mint are UUID + extension only; reject anything else (path safety).
+  if (!/^[a-zA-Z0-9._-]+$/.test(key)) return new Response("Not found", { status: 404 });
+
+  const obj = await env.MEDIA.get(key);
+  if (!obj) return new Response("Not found", { status: 404 });
+
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  headers.set("cache-control", "public, max-age=31536000, immutable");
+  headers.set("etag", obj.httpEtag);
+  return new Response(obj.body, { headers });
+}
+
 // Constant-time-ish string compare to avoid leaking token length/prefix via
 // timing. Not cryptographically perfect in JS, but far better than ===.
 function timingSafeEqual(a: string, b: string): boolean {
@@ -268,4 +375,16 @@ function timingSafeEqual(a: string, b: string): boolean {
     mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+function extForContentType(ct: string): string {
+  const map: Record<string, string> = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+    "image/avif": ".avif",
+  };
+  return map[ct.split(";")[0].trim()] || ".img";
 }

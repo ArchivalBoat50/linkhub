@@ -1,7 +1,10 @@
-// Everything that changes between models lives here.
-// For "single page per model" (your current phase), clone the repo per
-// model and edit this file + wrangler.toml PAGE_ID. When you go multi-tenant,
-// this becomes a row in a `pages` config table instead of a source file.
+// Compile-time SEED / FALLBACK config.
+//
+// As of the admin surface, the live source of truth is the `pages` row in D1
+// (see src/page-store.ts). This object is now the fallback used when a deploy
+// hasn't been seeded into D1 yet, and the initial value the admin editor loads
+// before the first save. Editing this file still works for a fresh deploy;
+// once you save from /admin, the D1 row wins.
 
 export interface LinkItem {
   id: string;          // stable id, used as the analytics key — don't reuse ids across unrelated links
@@ -33,7 +36,7 @@ export interface PageConfig {
   // funnel page Meta's crawler and integrity systems inspect; a suggestive
   // image here works directly against the shadowban-avoidance this whole build
   // is for (on-page content signal — see ARCHITECTURE.md §1 mechanism #3/#4).
-  avatarUrl: "https://pub-d8929465aa2c4a2290263cc28ca63ce2.r2.dev/photo_2025-11-23_23-57-56.jpg",
+  avatarUrl: string;
 
   // Full-bleed background image behind the card. Human page only.
   backgroundUrl?: string;

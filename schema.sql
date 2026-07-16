@@ -2,6 +2,18 @@
 -- page_id partitions every row so this same schema scales to multi-tenant
 -- later without a migration — you'll just have more distinct page_id values.
 
+-- Runtime page config. Moves the profile (name, handle, tagline, avatar,
+-- background, links) out of the compile-time src/config.ts and into a row the
+-- admin surface can edit without a redeploy. One row per page_id today; the
+-- account_id column is already here so this is a routing change, not a
+-- migration, when multi-tenant lands. config_json is a serialized PageConfig.
+CREATE TABLE IF NOT EXISTS pages (
+  page_id      TEXT PRIMARY KEY,
+  account_id   TEXT,                    -- NULL until multi-tenant; FK to accounts later
+  config_json  TEXT NOT NULL,           -- serialized PageConfig (see src/config.ts)
+  updated_at   INTEGER NOT NULL         -- unix ms of last save
+);
+
 CREATE TABLE IF NOT EXISTS page_visits (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   page_id         TEXT NOT NULL,

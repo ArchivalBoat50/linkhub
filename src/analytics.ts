@@ -4,6 +4,11 @@ export interface Env {
   MODEL_NAME: string;
   DASHBOARD_TOKEN: string;
   VISITOR_SALT: string;
+  // Admin surface (see src/admin.ts). Token gate for /api/admin/*.
+  ADMIN_TOKEN: string;
+  // Optional R2 bucket for admin image uploads. When unbound, the upload
+  // endpoint 501s and admins can still paste hosted image URLs.
+  MEDIA?: R2Bucket;
 }
 
 // Never store raw IPs. Hash IP + calendar day + a secret salt so you can

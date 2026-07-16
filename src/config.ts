@@ -22,6 +22,14 @@ export interface LinkItem {
   faviconFallback?: boolean; // default true — use destination favicon when no logoUrl/icon
 }
 
+// How the background media is laid out on the HUMAN page.
+//   none   — plain gradient (also the bot page's only look)
+//   banner — a strip across the top, card sits below it
+//   full   — full-bleed behind the whole card, under a dark scrim
+export type BackgroundType = "none" | "banner" | "full";
+// Whether backgroundUrl points at an image or a (muted, looping) video.
+export type BackgroundMediaType = "image" | "video";
+
 export interface PageConfig {
   modelName: string;          // shown to bots / in OG tags — keep this brand-neutral and clean
   handle: string;              // e.g. "@yourhandle" shown on the page
@@ -38,8 +46,12 @@ export interface PageConfig {
   // is for (on-page content signal — see ARCHITECTURE.md §1 mechanism #3/#4).
   avatarUrl: string;
 
-  // Full-bleed background image behind the card. Human page only.
+  // Background media behind/above the card. HUMAN page only — the bot/crawler
+  // page never renders any of this (always the plain gradient). backgroundUrl
+  // may be an image or a video depending on backgroundMediaType.
   backgroundUrl?: string;
+  backgroundType?: BackgroundType;         // default "none" (or "full" if a url is set pre-migration)
+  backgroundMediaType?: BackgroundMediaType; // default "image"
 
   ogDescription: string;       // shown in Instagram/Meta link previews — keep generic, nothing that reads as the flagged category
   links: LinkItem[];

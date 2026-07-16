@@ -1,14 +1,21 @@
-// Admin surface — edit the live page config without a redeploy.
+// Admin surface — edit the live page config in place, without a redeploy.
 //
-// Self-contained HTML+JS string, same framework-light approach as dashboard.ts.
-// Gated client-side by a token that is validated server-side on every
-// /api/admin/* call (ADMIN_TOKEN secret). Cloudflare Access can be layered in
-// front of /admin* at the network layer later without touching this code.
+// Self-contained HTML+JS string (framework-light, same as dashboard.ts). The
+// editor renders a live preview that mirrors the real page and overlays edit
+// affordances: change-icons on the avatar and background/banner, inline
+// (contenteditable) name/handle/tagline/labels, and per-card edit/delete plus
+// an "add link" control.
 //
-// This page DOES show real destination URLs — that's intentional and safe: it
-// only renders them for a request that carries a valid ADMIN_TOKEN (the owner).
-// The invariant that matters (URLs never reach an *unauthenticated* client or a
-// crawler) is unaffected; see ARCHITECTURE.md §14.0.
+// Gated client-side by a token validated server-side on every /api/admin/*
+// call (ADMIN_TOKEN). Cloudflare Access can be layered in front of /admin*
+// later without touching this code.
+//
+// This page DOES show real destination URLs — intentional and safe: only for a
+// request carrying a valid ADMIN_TOKEN (the owner). The invariant that matters
+// (URLs never reach an *unauthenticated* client or a crawler) is unaffected;
+// see ARCHITECTURE.md §14.0. Nothing here weakens the cloaking: the background
+// video/photo and avatar are still rendered by render.ts on the HUMAN page
+// only — the bot page never emits them.
 
 export function renderAdminShell(pageId: string, modelName: string): string {
   return `<!doctype html>
@@ -17,48 +24,128 @@ export function renderAdminShell(pageId: string, modelName: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(modelName)} — Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:#14100F; --card:#1E1815; --card2:#241D19; --text:#F1EAE0; --dim:#9A8E82;
-    --line:rgba(255,255,255,0.10); --accent:#C9A15A; --good:#7FB88F; --bad:#C97A7A;
+    --bg:#14100F; --panel:#1E1815; --panel2:#241D19; --text:#F1EAE0; --dim:#9A8E82;
+    --line:rgba(255,255,255,0.12); --accent:#C9A15A; --mauve:#C97A94; --good:#7FB88F; --bad:#C97A7A;
+    --stage-bg:#241220; --stage-card:#2E1826;
   }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, sans-serif; padding: 24px; max-width: 760px; margin: 0 auto; }
-  h1 { font-size: 18px; margin: 0 0 2px; }
-  .sub { color: var(--dim); font-size: 12px; margin: 0 0 20px; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: 'Manrope', system-ui, -apple-system, sans-serif; padding: 0; }
   a { color: var(--accent); }
-  label { display:block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--dim); margin: 0 0 5px; }
-  input[type=text], input[type=url], textarea, select {
-    width: 100%; font-family: inherit; font-size: 14px; background: var(--card2); color: var(--text);
-    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
-  }
-  textarea { resize: vertical; min-height: 54px; }
-  .field { margin-bottom: 14px; }
-  .panel { background: var(--card); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
-  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--dim); margin: 0 0 14px; }
-  button { font-family: inherit; font-size: 14px; background: var(--card2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
-  button.primary { background: var(--accent); color: #201200; border-color: var(--accent); font-weight: 700; }
-  button.mini { padding: 5px 9px; font-size: 12px; }
-  button.danger { color: var(--bad); }
-  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-  @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
-  .link-item { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; background: var(--card2); }
-  .link-item .head { display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px; }
-  .link-item .head strong { font-size: 13px; }
-  .checkbox { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0; }
-  .checkbox input { width:auto; }
-  .media-row { display:flex; gap:8px; align-items:center; }
-  .media-row input { flex:1; }
-  .bar { position: sticky; bottom: 0; background: linear-gradient(180deg, transparent, var(--bg) 40%); padding: 16px 0 4px; display:flex; gap:10px; align-items:center; }
-  #status { font-size: 13px; }
-  #status.ok { color: var(--good); }
-  #status.err { color: var(--bad); }
-  #gate { max-width: 320px; margin: 80px auto; text-align: center; }
-  #gate input { width: 100%; margin-bottom: 10px; }
-  #gate button { width: 100%; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+  button { font-family: inherit; cursor: pointer; }
+
+  /* token gate */
+  #gate { max-width: 320px; margin: 90px auto; text-align: center; padding: 0 20px; }
+  #gate h1 { font-size: 18px; margin: 0 0 6px; }
+  #gate input { width: 100%; margin-bottom: 10px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  #gate .sub { color: var(--dim); font-size: 12px; margin: 0 0 14px; }
+  .primary { background: var(--accent); color: #201200; border: 1px solid var(--accent); font-weight: 700; border-radius: 8px; padding: 9px 16px; }
+  #gate .primary { width: 100%; }
+
   #app { display:none; }
-  .hint { text-transform:none; letter-spacing:0; font-weight:400; color:var(--dim); font-size:11px; margin-top:4px; }
+
+  /* top bar */
+  .topbar { position: sticky; top: 0; z-index: 20; display:flex; justify-content:space-between; align-items:center; gap:12px;
+    padding: 12px 18px; background: rgba(20,16,15,0.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .crumbs { font-size: 12px; color: var(--dim); }
+  .actions { display:flex; align-items:center; gap: 10px; }
+  .actions button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font-size: 13px; }
+  #status { font-size: 12px; }
+  #status.ok { color: var(--good); } #status.err { color: var(--bad); }
+
+  /* background control bar */
+  .bgbar { display:flex; align-items:center; gap: 14px; flex-wrap: wrap; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .bgbar .bglabel { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--dim); }
+  .seg { display:inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--dim); border: 0; padding: 7px 13px; font-size: 12px; border-right: 1px solid var(--line); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.active { background: var(--accent); color: #201200; font-weight: 700; }
+  .seg.disabled { opacity: 0.4; pointer-events: none; }
+
+  /* the phone-like preview stage (mirrors render.ts) */
+  .stage { position: relative; width: 100%; max-width: 440px; margin: 20px auto 40px; border-radius: 24px; overflow: hidden;
+    background: radial-gradient(120% 100% at 50% -10%, #34192C 0%, var(--stage-bg) 55%); min-height: 580px;
+    display:flex; flex-direction: column; box-shadow: 0 24px 70px -24px #000, 0 0 0 1px var(--line); }
+  .full-layer { position: absolute; inset: 0; z-index: 0; }
+  .full-layer img, .full-layer video { width: 100%; height: 100%; object-fit: cover; display:block; }
+  .full-layer .scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(20,10,17,0.5), rgba(20,10,17,0.82)); }
+  #bannerSlot { position: relative; z-index: 1; }
+  .banner-strip { position: relative; width: 100%; height: 160px; overflow: hidden; }
+  .banner-strip img, .banner-strip video { width: 100%; height: 100%; object-fit: cover; display:block; }
+  .banner-strip::after { content:""; position:absolute; left:0; right:0; bottom:0; height:55%;
+    background: linear-gradient(180deg, transparent, var(--stage-bg)); pointer-events:none; }
+  .bg-ph { display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:120px;
+    background: repeating-linear-gradient(45deg,#33192a,#33192a 12px,#2c1524 12px,#2c1524 24px); color: var(--dim); font-size: 12px; }
+
+  .stage-content { position: relative; z-index: 1; padding: 30px 22px 36px; display:flex; flex-direction: column; align-items: center; }
+
+  .avatar-wrap { position: relative; width: 96px; height: 96px; margin: 0 auto 16px; }
+  .avatar { width: 96px; height: 96px; border-radius: 50%; display:flex; align-items:center; justify-content:center; overflow:hidden;
+    background: linear-gradient(155deg, var(--accent), var(--mauve)); color: var(--stage-bg);
+    font-family: 'Fraunces', Georgia, serif; font-size: 32px; font-weight: 600;
+    box-shadow: 0 0 0 3px rgba(201,161,90,0.25), 0 12px 30px -12px rgba(0,0,0,0.6); }
+  .avatar img { width:100%; height:100%; object-fit: cover; }
+  .avatar.placeholder { background: repeating-linear-gradient(45deg,#3a2130,#3a2130 10px,#331c2a 10px,#331c2a 20px);
+    color: var(--dim); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* editable text */
+  .ed { outline: none; border-radius: 6px; transition: box-shadow .12s; cursor: text; max-width: 100%; }
+  .ed:hover { box-shadow: 0 0 0 1px var(--line); }
+  .ed:focus { box-shadow: 0 0 0 2px var(--accent); background: rgba(0,0,0,0.2); }
+  .ed:empty:before { content: attr(data-ph); color: var(--dim); opacity: 0.7; }
+  .ed.name { font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 26px; text-align:center; margin: 2px 0; padding: 0 6px; }
+  .ed.handle { color: var(--accent); font-size: 14px; font-weight: 600; text-align:center; margin: 2px 0; padding: 0 6px; }
+  .ed.tagline { color: #C9BDB4; font-size: 14px; text-align:center; margin: 6px 0 26px; padding: 2px 8px; line-height: 1.5; }
+
+  /* link cards */
+  .links { display:flex; flex-direction: column; gap: 14px; width: 100%; }
+  .link-card { position: relative; display:flex; align-items:center; gap: 12px; background: var(--stage-card);
+    border: 1px solid rgba(201,161,90,0.18); border-radius: 14px; padding: 14px 14px 14px 18px; }
+  .link-icon { width: 34px; height: 34px; border-radius: 50%; flex:none; background: rgba(201,161,90,0.12);
+    display:flex; align-items:center; justify-content:center; color: var(--accent); overflow: hidden; }
+  .link-icon img { width: 20px; height: 20px; object-fit: contain; border-radius: 4px; }
+  .link-label { font-size: 15px; font-weight: 600; flex: 1; }
+  .card-actions { display:flex; gap: 4px; flex: none; }
+  .icon-btn { width: 30px; height: 30px; border-radius: 8px; background: rgba(255,255,255,0.06); border: 1px solid var(--line);
+    color: var(--text); display:flex; align-items:center; justify-content:center; }
+  .icon-btn.danger { color: var(--bad); }
+  .add-card { margin-top: 14px; width: 100%; border: 1px dashed rgba(201,161,90,0.4); background: transparent; color: var(--accent);
+    border-radius: 14px; padding: 13px; font-size: 14px; font-weight: 600; }
+
+  /* change buttons (overlay on avatar / background) */
+  .change-btn { position: absolute; z-index: 3; width: 30px; height: 30px; border-radius: 50%; background: var(--accent);
+    color: #201200; border: 2px solid var(--stage-bg); display:flex; align-items:center; justify-content:center; padding: 0; }
+  .change-btn.on-avatar { right: -2px; bottom: -2px; }
+  .change-btn.on-bg { right: 10px; top: 10px; }
+
+  /* popovers */
+  .overlay { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.6); display:none; align-items:center; justify-content:center; padding: 20px; }
+  .overlay.open { display:flex; }
+  .modal { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .modal h3 { margin: 0 0 14px; font-size: 14px; }
+  .modal .field { margin-bottom: 12px; }
+  .modal label { display:block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--dim); margin: 0 0 5px; }
+  .modal input, .modal select, .modal textarea { width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 11px; font-family: inherit; font-size: 14px; }
+  .modal .row { display:flex; gap: 8px; align-items:center; }
+  .modal .row input { flex: 1; }
+  .modal .mediaprev { width: 100%; height: 130px; border-radius: 10px; overflow:hidden; margin-bottom: 12px; background: var(--panel2);
+    display:flex; align-items:center; justify-content:center; color: var(--dim); font-size: 12px; }
+  .modal .mediaprev img, .modal .mediaprev video { width:100%; height:100%; object-fit: cover; }
+  .modal .btns { display:flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
+  .modal .mini { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  .modal .mini.danger { color: var(--bad); }
+  .modal .hint { font-size: 11px; color: var(--dim); margin: 6px 0 0; }
+  .checkbox { display:flex; align-items:center; gap: 8px; font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .checkbox input { width: auto; }
+  .more { max-width: 440px; margin: 0 auto 60px; padding: 0 6px; }
+  .more summary { cursor: pointer; color: var(--dim); font-size: 13px; padding: 8px 0; }
+  .more .field { margin: 10px 0; }
+  .more label { display:block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--dim); margin: 0 0 5px; }
+  .more input, .more textarea { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font-family: inherit; }
 </style>
 </head>
 <body>
@@ -71,193 +158,356 @@ export function renderAdminShell(pageId: string, modelName: string): string {
   </div>
 
   <div id="app">
-    <h1>${escapeHtml(modelName)} — Admin</h1>
-    <p class="sub">Editing page <code>${escapeHtml(pageId)}</code> · <a href="/" target="_blank">view page</a> · <a href="/dashboard" target="_blank">analytics</a></p>
-
-    <div class="panel">
-      <h2>Profile</h2>
-      <div class="field"><label>Display name</label><input type="text" id="modelName" /></div>
-      <div class="grid2">
-        <div class="field"><label>Handle</label><input type="text" id="handle" placeholder="@yourhandle" /></div>
-        <div class="field"><label>Avatar initials (fallback)</label><input type="text" id="avatarInitials" maxlength="3" /></div>
-      </div>
-      <div class="field"><label>Tagline</label><input type="text" id="tagline" /></div>
-      <div class="field">
-        <label>Avatar image URL</label>
-        <div class="media-row"><input type="text" id="avatarUrl" placeholder="https://… or upload" /><button class="mini" type="button" data-upload="avatarUrl">Upload</button></div>
-        <p class="hint">Shown on the human page only. Keep it clean/SFW — bots never see it.</p>
-      </div>
-      <div class="field">
-        <label>Background image URL (optional)</label>
-        <div class="media-row"><input type="text" id="backgroundUrl" placeholder="https://… or upload" /><button class="mini" type="button" data-upload="backgroundUrl">Upload</button></div>
-      </div>
-      <div class="field"><label>OG description (shown in link previews — keep generic)</label><textarea id="ogDescription"></textarea></div>
+    <div class="topbar">
+      <div class="crumbs">Editing <code>${escapeHtml(pageId)}</code> · <a href="/" target="_blank">view page</a> · <a href="/dashboard" target="_blank">analytics</a></div>
+      <div class="actions"><span id="status"></span><button id="reload" type="button">Discard</button><button id="save" class="primary" type="button">Save changes</button></div>
     </div>
 
-    <div class="panel">
-      <h2>Links</h2>
-      <div id="links"></div>
-      <button class="mini" type="button" id="addLink">+ Add link</button>
+    <div class="bgbar">
+      <span class="bglabel">Background</span>
+      <div class="seg" id="segType">
+        <button type="button" data-type="none">None</button>
+        <button type="button" data-type="banner">Banner</button>
+        <button type="button" data-type="full">Full</button>
+      </div>
+      <div class="seg" id="segMedia">
+        <button type="button" data-media="image">Image</button>
+        <button type="button" data-media="video">Video</button>
+      </div>
     </div>
 
-    <div class="bar">
-      <button class="primary" id="save">Save changes</button>
-      <button id="reload" type="button">Discard &amp; reload</button>
-      <span id="status"></span>
+    <div class="stage" id="stage">
+      <div class="full-layer" id="fullLayer"></div>
+      <div id="bannerSlot"></div>
+      <div class="stage-content">
+        <div class="avatar-wrap" id="avatarWrap"></div>
+        <div class="ed name" contenteditable="true" data-field="modelName" data-ph="Display name"></div>
+        <div class="ed handle" contenteditable="true" data-field="handle" data-ph="@handle"></div>
+        <div class="ed tagline" contenteditable="true" data-field="tagline" data-ph="Short tagline"></div>
+        <div class="links" id="stageLinks"></div>
+        <button class="add-card" id="addLink" type="button">+ Add link</button>
+      </div>
+    </div>
+
+    <details class="more">
+      <summary>More settings (avatar fallback, link-preview text)</summary>
+      <div class="field"><label>Avatar initials (fallback when no photo)</label><input type="text" id="avatarInitials" maxlength="3"></div>
+      <div class="field"><label>OG description — shown in Instagram/Meta link previews. Keep it generic.</label><textarea id="ogDescription" rows="2"></textarea></div>
+    </details>
+  </div>
+
+  <!-- media picker popover -->
+  <div class="overlay" id="mediaOverlay">
+    <div class="modal">
+      <h3 id="mediaTitle">Change image</h3>
+      <div class="mediaprev" id="mediaPrev">No media</div>
+      <div class="field">
+        <label>Paste a hosted URL</label>
+        <div class="row"><input type="text" id="mediaUrl" placeholder="https://…"><button class="mini" type="button" id="mediaUseUrl">Use</button></div>
+      </div>
+      <p class="hint" id="mediaHint"></p>
+      <div class="btns">
+        <button class="mini" type="button" id="mediaUpload">Upload file</button>
+        <div style="display:flex;gap:8px">
+          <button class="mini danger" type="button" id="mediaRemove">Remove</button>
+          <button class="mini" type="button" id="mediaClose">Done</button>
+        </div>
+      </div>
     </div>
   </div>
 
-<input type="file" id="fileInput" accept="image/*" style="display:none" />
+  <!-- link editor popover -->
+  <div class="overlay" id="linkOverlay">
+    <div class="modal">
+      <h3>Edit link</h3>
+      <div class="field"><label>ID (stable analytics key — letters, numbers, - and _)</label><input type="text" id="lkId" placeholder="vip"></div>
+      <div class="field"><label>Label (shown on the card)</label><input type="text" id="lkLabel" placeholder="VIP Access"></div>
+      <div class="field"><label>Destination URL (never rendered on the page)</label><input type="text" id="lkUrl" placeholder="https://…"></div>
+      <div class="field"><label>Icon glyph</label><select id="lkIcon"></select></div>
+      <div class="field"><label>Logo image URL (optional — overrides the glyph)</label>
+        <div class="row"><input type="text" id="lkLogo" placeholder="https://… or upload"><button class="mini" type="button" id="lkLogoUpload">Upload</button></div>
+      </div>
+      <label class="checkbox"><input type="checkbox" id="lkFav"> Use destination favicon when no logo/glyph is set</label>
+      <div class="btns">
+        <button class="mini danger" type="button" id="lkDelete">Delete link</button>
+        <div style="display:flex;gap:8px">
+          <button class="mini" type="button" id="lkCancel">Cancel</button>
+          <button class="primary" type="button" id="lkApply">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="fileInput" style="display:none" />
 
 <script>
-var ICONS = ['', 'vip', 'instagram', 'x', 'telegram', 'tiktok', 'youtube', 'generic'];
+var ICON_LIST = ['', 'vip', 'instagram', 'x', 'telegram', 'tiktok', 'youtube', 'generic'];
+var GLYPH = {
+  vip:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l4 3 5-6 5 6 4-3-2 11H5L3 8z"/></svg>',
+  instagram:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/></svg>',
+  telegram:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 3L2 11l6 2 2 6 3-4 5 3 3-15z"/></svg>',
+  x:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16M20 4L4 20"/></svg>',
+  tiktok:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a4 4 0 1 0 4 4V4c1 2 2.5 3 5 3"/></svg>',
+  youtube:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="M10 9l5 3-5 3z" fill="currentColor"/></svg>',
+  generic:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>'
+};
+var PENCIL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L20 8l-4-4L4 16v4z"/></svg>';
+var TRASH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
+var CAMERA = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3"/></svg>';
+
 var token = sessionStorage.getItem('lh_admin_token') || '';
-var uploadTarget = null; // element id currently awaiting an uploaded URL
+var state = null;
+var uploadCtx = null;   // {kind:'avatar'|'background'|'logo'} — where an uploaded/URL value goes
+var editingLink = -1;   // index into state.links for the link editor
 
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]; }); }
-function h(id) { return document.getElementById(id); }
-function setStatus(msg, kind) { var s = h('status'); s.textContent = msg || ''; s.className = kind || ''; }
+function h(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+function setStatus(m,k){ var s=h('status'); s.textContent=m||''; s.className=k||''; }
+function authHeaders(json){ var o={Authorization:'Bearer '+token}; if(json) o['content-type']='application/json'; return o; }
 
-function headers(json) {
-  var o = { Authorization: 'Bearer ' + token };
-  if (json) o['content-type'] = 'application/json';
-  return o;
-}
-
-function unlock() {
-  token = h('token').value.trim();
-  if (!token) return;
-  load();
-}
-
-function load() {
-  fetch('/api/admin/config', { headers: headers(false) })
-    .then(function (r) {
-      if (r.status === 401) { throw new Error('unauthorized'); }
-      if (!r.ok) { throw new Error('load failed'); }
-      return r.json();
-    })
-    .then(function (cfg) {
+// ---- auth + load ----
+function unlock(){ token=h('token').value.trim(); if(token) load(); }
+function load(){
+  fetch('/api/admin/config',{headers:authHeaders(false)})
+    .then(function(r){ if(r.status===401) throw new Error('unauthorized'); if(!r.ok) throw new Error('load'); return r.json(); })
+    .then(function(cfg){
       sessionStorage.setItem('lh_admin_token', token);
-      h('gate').style.display = 'none';
-      h('app').style.display = 'block';
-      fill(cfg);
+      state = normalize(cfg);
+      h('gate').style.display='none';
+      h('app').style.display='block';
+      renderAll();
       setStatus('Loaded.', 'ok');
     })
-    .catch(function (e) {
-      if (e.message === 'unauthorized') { h('gateErr').textContent = 'Invalid token.'; }
-      else { h('gateErr').textContent = 'Could not load config.'; }
-    });
+    .catch(function(e){ h('gateErr').textContent = e.message==='unauthorized' ? 'Invalid token.' : 'Could not load config.'; });
+}
+function normalize(cfg){
+  cfg = cfg || {};
+  cfg.links = cfg.links || [];
+  cfg.backgroundType = cfg.backgroundType || (cfg.backgroundUrl ? 'full' : 'none');
+  cfg.backgroundMediaType = cfg.backgroundMediaType || 'image';
+  return cfg;
 }
 
-function fill(cfg) {
-  h('modelName').value = cfg.modelName || '';
-  h('handle').value = cfg.handle || '';
-  h('avatarInitials').value = cfg.avatarInitials || '';
-  h('tagline').value = cfg.tagline || '';
-  h('avatarUrl').value = cfg.avatarUrl || '';
-  h('backgroundUrl').value = cfg.backgroundUrl || '';
-  h('ogDescription').value = cfg.ogDescription || '';
-  h('links').innerHTML = '';
-  (cfg.links || []).forEach(addLinkRow);
+// ---- render ----
+function renderAll(){
+  // text fields
+  document.querySelectorAll('[data-field]').forEach(function(el){ el.textContent = state[el.getAttribute('data-field')] || ''; });
+  h('avatarInitials').value = state.avatarInitials || '';
+  h('ogDescription').value = state.ogDescription || '';
+  renderBgBar();
+  renderBackground();
+  renderAvatar();
+  renderLinks();
 }
 
-function addLinkRow(link) {
-  link = link || {};
-  var wrap = document.createElement('div');
-  wrap.className = 'link-item';
-  var iconOpts = ICONS.map(function (ic) {
-    var sel = (link.icon || '') === ic ? ' selected' : '';
-    return '<option value="' + ic + '"' + sel + '>' + (ic === '' ? '(none)' : ic) + '</option>';
-  }).join('');
-  var favChecked = link.faviconFallback === false ? '' : ' checked';
-  wrap.innerHTML =
-    '<div class="head"><strong>Link</strong><button class="mini danger" type="button" data-remove>Remove</button></div>' +
-    '<div class="grid2">' +
-      '<div class="field"><label>ID (stable, analytics key)</label><input type="text" class="l-id" value="' + esc(link.id) + '" placeholder="vip"></div>' +
-      '<div class="field"><label>Label</label><input type="text" class="l-label" value="' + esc(link.label) + '" placeholder="VIP Access"></div>' +
-    '</div>' +
-    '<div class="field"><label>Destination URL (never shown on the page)</label><input type="text" class="l-url" value="' + esc(link.url) + '" placeholder="https://…"></div>' +
-    '<div class="grid2">' +
-      '<div class="field"><label>Icon glyph</label><select class="l-icon">' + iconOpts + '</select></div>' +
-      '<div class="field"><label>Logo image URL (optional, overrides glyph)</label><div class="media-row"><input type="text" class="l-logo" value="' + esc(link.logoUrl) + '" placeholder="https://… or upload"><button class="mini" type="button" data-upload-logo>Upload</button></div></div>' +
-    '</div>' +
-    '<label class="checkbox"><input type="checkbox" class="l-fav"' + favChecked + '> Use destination favicon when no logo/icon set</label>';
-  wrap.querySelector('[data-remove]').addEventListener('click', function () { wrap.remove(); });
-  wrap.querySelector('[data-upload-logo]').addEventListener('click', function () {
-    uploadTarget = wrap.querySelector('.l-logo');
-    h('fileInput').click();
+function renderBgBar(){
+  [].forEach.call(h('segType').children, function(b){ b.classList.toggle('active', b.getAttribute('data-type') === (state.backgroundType||'none')); });
+  [].forEach.call(h('segMedia').children, function(b){ b.classList.toggle('active', b.getAttribute('data-media') === (state.backgroundMediaType||'image')); });
+  h('segMedia').classList.toggle('disabled', (state.backgroundType||'none') === 'none');
+}
+
+function mediaMarkup(url, mediaType){
+  if(!url) return '';
+  return mediaType === 'video'
+    ? '<video src="'+esc(url)+'" autoplay muted loop playsinline></video>'
+    : '<img src="'+esc(url)+'" alt="">';
+}
+function changeBtnEl(kind){
+  var b = document.createElement('button');
+  b.type='button'; b.className='change-btn on-bg'; b.innerHTML=CAMERA; b.title='Change background';
+  b.addEventListener('click', function(){ openMedia('background'); });
+  return b;
+}
+function bgInnerHtml(){
+  return state.backgroundUrl ? mediaMarkup(state.backgroundUrl, state.backgroundMediaType)
+    : '<div class="bg-ph">+ Add ' + (state.backgroundMediaType==='video'?'video':'image') + '</div>';
+}
+function renderBackground(){
+  var full=h('fullLayer'), banner=h('bannerSlot');
+  full.innerHTML=''; banner.innerHTML='';
+  var type = state.backgroundType || 'none';
+  if(type==='none') return;
+  if(type==='full'){
+    full.innerHTML = bgInnerHtml() + '<div class="scrim"></div>';
+    full.appendChild(changeBtnEl());
+  } else {
+    var strip=document.createElement('div'); strip.className='banner-strip';
+    strip.innerHTML = bgInnerHtml();
+    strip.appendChild(changeBtnEl());
+    banner.appendChild(strip);
+  }
+}
+
+function renderAvatar(){
+  var w=h('avatarWrap'); w.innerHTML='';
+  var av=document.createElement('div');
+  if(state.avatarUrl){ av.className='avatar'; av.innerHTML='<img src="'+esc(state.avatarUrl)+'" alt="">'; }
+  else if(state.avatarInitials){ av.className='avatar'; av.textContent=state.avatarInitials; }
+  else { av.className='avatar placeholder'; av.textContent='Photo'; }
+  w.appendChild(av);
+  var b=document.createElement('button'); b.type='button'; b.className='change-btn on-avatar'; b.innerHTML=CAMERA; b.title='Change photo';
+  b.addEventListener('click', function(){ openMedia('avatar'); });
+  w.appendChild(b);
+}
+
+function iconPreview(l){
+  if(l.logoUrl) return '<img src="'+esc(l.logoUrl)+'" alt="">';
+  if(l.icon && GLYPH[l.icon]) return GLYPH[l.icon];
+  return GLYPH.generic;
+}
+function renderLinks(){
+  var c=h('stageLinks'); c.innerHTML='';
+  state.links.forEach(function(l, i){
+    var card=document.createElement('div'); card.className='link-card';
+    card.innerHTML =
+      '<div class="link-icon">'+iconPreview(l)+'</div>' +
+      '<div class="link-label ed" contenteditable="true" data-linklabel="'+i+'" data-ph="Label">'+esc(l.label)+'</div>' +
+      '<div class="card-actions">' +
+        '<button class="icon-btn" type="button" data-edit="'+i+'" title="Edit link">'+PENCIL+'</button>' +
+        '<button class="icon-btn danger" type="button" data-del="'+i+'" title="Delete link">'+TRASH+'</button>' +
+      '</div>';
+    c.appendChild(card);
   });
-  h('links').appendChild(wrap);
+  c.querySelectorAll('[data-edit]').forEach(function(b){ b.addEventListener('click', function(){ openLinkEditor(+b.getAttribute('data-edit')); }); });
+  c.querySelectorAll('[data-del]').forEach(function(b){ b.addEventListener('click', function(){
+    if(state.links.length<=1){ setStatus('Keep at least one link.', 'err'); return; }
+    state.links.splice(+b.getAttribute('data-del'), 1); renderLinks();
+  }); });
+  bindSingleLine(c.querySelectorAll('.ed'));
 }
 
-function collect() {
-  var links = [].map.call(document.querySelectorAll('.link-item'), function (w) {
-    return {
-      id: w.querySelector('.l-id').value.trim(),
-      label: w.querySelector('.l-label').value.trim(),
-      url: w.querySelector('.l-url').value.trim(),
-      icon: w.querySelector('.l-icon').value || undefined,
-      logoUrl: w.querySelector('.l-logo').value.trim() || undefined,
-      faviconFallback: w.querySelector('.l-fav').checked
-    };
+// keep contenteditable single-line (Enter blurs instead of inserting a newline)
+function bindSingleLine(nodes){
+  [].forEach.call(nodes, function(el){
+    el.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
   });
-  return {
-    modelName: h('modelName').value.trim(),
-    handle: h('handle').value.trim(),
-    avatarInitials: h('avatarInitials').value.trim(),
-    tagline: h('tagline').value.trim(),
-    avatarUrl: h('avatarUrl').value.trim(),
-    backgroundUrl: h('backgroundUrl').value.trim(),
-    ogDescription: h('ogDescription').value.trim(),
-    links: links
-  };
 }
 
-function save() {
-  setStatus('Saving…', '');
-  fetch('/api/admin/config', { method: 'PUT', headers: headers(true), body: JSON.stringify(collect()) })
-    .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
-    .then(function (res) {
-      if (!res.ok) { setStatus(res.body && res.body.error ? res.body.error : 'Save failed.', 'err'); return; }
-      fill(res.body);
-      setStatus('Saved. Live now (cache refreshes within ~60s across edges).', 'ok');
-    })
-    .catch(function () { setStatus('Network error.', 'err'); });
+// pull every editable value out of the DOM into state (called before save)
+function syncState(){
+  document.querySelectorAll('[data-field]').forEach(function(el){ state[el.getAttribute('data-field')] = el.textContent.replace(/\\s+/g,' ').trim(); });
+  state.avatarInitials = h('avatarInitials').value.trim();
+  state.ogDescription = h('ogDescription').value.trim();
+  document.querySelectorAll('[data-linklabel]').forEach(function(el){
+    var i=+el.getAttribute('data-linklabel'); if(state.links[i]) state.links[i].label = el.textContent.replace(/\\s+/g,' ').trim();
+  });
 }
 
-// ---- image upload (R2) ----
-h('fileInput').addEventListener('change', function () {
-  var file = this.files && this.files[0];
-  this.value = '';
-  if (!file || !uploadTarget) return;
-  setStatus('Uploading…', '');
-  fetch('/api/admin/upload?filename=' + encodeURIComponent(file.name), {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + token, 'content-type': file.type || 'application/octet-stream' },
-    body: file
+// ---- background segmented controls ----
+[].forEach.call(h('segType').children, function(b){
+  b.addEventListener('click', function(){ state.backgroundType = b.getAttribute('data-type'); renderBgBar(); renderBackground(); });
+});
+[].forEach.call(h('segMedia').children, function(b){
+  b.addEventListener('click', function(){ state.backgroundMediaType = b.getAttribute('data-media'); renderBgBar(); renderBackground(); });
+});
+
+// ---- media picker popover ----
+function openMedia(kind){
+  uploadCtx = { kind: kind };
+  var cur = kind==='avatar' ? state.avatarUrl : state.backgroundUrl;
+  var isVideo = kind==='background' && state.backgroundMediaType==='video';
+  h('mediaTitle').textContent = 'Change ' + (kind==='avatar' ? 'profile photo' : 'background');
+  h('mediaUrl').value = cur || '';
+  h('mediaHint').textContent = isVideo ? 'Video: short muted loop works best, max 30 MB.' : 'Image: JPG/PNG/WebP, max 5 MB.';
+  renderMediaPrev(cur, isVideo);
+  h('mediaOverlay').classList.add('open');
+}
+function renderMediaPrev(url, isVideo){
+  var p=h('mediaPrev');
+  if(!url){ p.innerHTML='No media'; return; }
+  p.innerHTML = isVideo ? '<video src="'+esc(url)+'" autoplay muted loop playsinline></video>' : '<img src="'+esc(url)+'" alt="">';
+}
+function applyMediaValue(url){
+  if(uploadCtx.kind==='avatar'){ state.avatarUrl = url; renderAvatar(); }
+  else if(uploadCtx.kind==='background'){
+    state.backgroundUrl = url;
+    if(url && (state.backgroundType==='none' || !state.backgroundType)) state.backgroundType='full';
+    renderBgBar(); renderBackground();
+  } else if(uploadCtx.kind==='logo'){
+    if(state.links[editingLink]){ state.links[editingLink].logoUrl = url; h('lkLogo').value = url; }
+  }
+}
+h('mediaUseUrl').addEventListener('click', function(){
+  var v=h('mediaUrl').value.trim(); applyMediaValue(v);
+  renderMediaPrev(v, uploadCtx.kind==='background' && state.backgroundMediaType==='video');
+  setStatus('Set. Remember to Save.', 'ok');
+});
+h('mediaRemove').addEventListener('click', function(){ applyMediaValue(''); renderMediaPrev('', false); });
+h('mediaClose').addEventListener('click', function(){ h('mediaOverlay').classList.remove('open'); });
+h('mediaUpload').addEventListener('click', function(){
+  var isVideo = uploadCtx.kind==='background' && state.backgroundMediaType==='video';
+  h('fileInput').setAttribute('accept', isVideo ? 'video/*' : 'image/*');
+  h('fileInput').click();
+});
+
+// ---- shared file upload ----
+h('fileInput').addEventListener('change', function(){
+  var file=this.files && this.files[0]; this.value='';
+  if(!file || !uploadCtx) return;
+  setStatus('Uploading…','');
+  fetch('/api/admin/upload?filename='+encodeURIComponent(file.name), {
+    method:'POST', headers:{Authorization:'Bearer '+token,'content-type':file.type||'application/octet-stream'}, body:file
   })
-    .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
-    .then(function (res) {
-      if (!res.ok) { setStatus(res.body && res.body.error ? res.body.error : 'Upload failed.', 'err'); return; }
-      uploadTarget.value = res.body.url;
-      uploadTarget = null;
+    .then(function(r){ return r.json().then(function(b){ return {ok:r.ok, body:b}; }); })
+    .then(function(res){
+      if(!res.ok){ setStatus(res.body && res.body.error ? res.body.error : 'Upload failed.', 'err'); return; }
+      applyMediaValue(res.body.url);
+      var isVideo = uploadCtx.kind==='background' && state.backgroundMediaType==='video';
+      if(h('mediaOverlay').classList.contains('open')) renderMediaPrev(res.body.url, isVideo);
       setStatus('Uploaded. Remember to Save.', 'ok');
     })
-    .catch(function () { setStatus('Upload error.', 'err'); });
+    .catch(function(){ setStatus('Upload error.', 'err'); });
 });
 
-[].forEach.call(document.querySelectorAll('[data-upload]'), function (btn) {
-  btn.addEventListener('click', function () { uploadTarget = h(btn.getAttribute('data-upload')); h('fileInput').click(); });
+// ---- link editor popover ----
+function openLinkEditor(i){
+  editingLink = i; var l = state.links[i] || {};
+  var sel=h('lkIcon'); sel.innerHTML = ICON_LIST.map(function(ic){
+    return '<option value="'+ic+'"'+((l.icon||'')===ic?' selected':'')+'>'+(ic===''?'(none)':ic)+'</option>';
+  }).join('');
+  h('lkId').value=l.id||''; h('lkLabel').value=l.label||''; h('lkUrl').value=l.url||'';
+  h('lkLogo').value=l.logoUrl||''; h('lkFav').checked = l.faviconFallback !== false;
+  h('linkOverlay').classList.add('open');
+}
+h('lkLogoUpload').addEventListener('click', function(){ uploadCtx={kind:'logo'}; h('fileInput').setAttribute('accept','image/*'); h('fileInput').click(); });
+h('lkApply').addEventListener('click', function(){
+  var l = state.links[editingLink]; if(!l) return;
+  l.id=h('lkId').value.trim(); l.label=h('lkLabel').value.trim(); l.url=h('lkUrl').value.trim();
+  l.icon=h('lkIcon').value||undefined; l.logoUrl=h('lkLogo').value.trim()||undefined; l.faviconFallback=h('lkFav').checked;
+  h('linkOverlay').classList.remove('open'); renderLinks();
 });
+h('lkCancel').addEventListener('click', function(){ h('linkOverlay').classList.remove('open'); });
+h('lkDelete').addEventListener('click', function(){
+  if(state.links.length<=1){ setStatus('Keep at least one link.', 'err'); return; }
+  state.links.splice(editingLink,1); h('linkOverlay').classList.remove('open'); renderLinks();
+});
+
+h('addLink').addEventListener('click', function(){
+  state.links.push({ id:'', label:'New link', url:'', faviconFallback:true });
+  renderLinks(); openLinkEditor(state.links.length-1);
+});
+
+// ---- save ----
+function save(){
+  syncState();
+  setStatus('Saving…','');
+  fetch('/api/admin/config', { method:'PUT', headers:authHeaders(true), body:JSON.stringify(state) })
+    .then(function(r){ return r.json().then(function(b){ return {ok:r.ok, body:b}; }); })
+    .then(function(res){
+      if(!res.ok){ setStatus(res.body && res.body.error ? res.body.error : 'Save failed.', 'err'); return; }
+      state = normalize(res.body); renderAll();
+      setStatus('Saved. Live now (edges refresh within ~60s).', 'ok');
+    })
+    .catch(function(){ setStatus('Network error.', 'err'); });
+}
 
 h('unlock').addEventListener('click', unlock);
-h('token').addEventListener('keydown', function (e) { if (e.key === 'Enter') unlock(); });
-h('addLink').addEventListener('click', function () { addLinkRow({ faviconFallback: true }); });
+h('token').addEventListener('keydown', function(e){ if(e.key==='Enter') unlock(); });
 h('save').addEventListener('click', save);
 h('reload').addEventListener('click', load);
+bindSingleLine(document.querySelectorAll('.stage-content > .ed'));
 
-if (token) { load(); }
+if(token) load();
 </script>
 </body>
 </html>`;

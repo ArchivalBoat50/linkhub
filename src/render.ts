@@ -21,20 +21,25 @@ const STYLE = `
     font-family: 'Manrope', system-ui, -apple-system, sans-serif;
     min-height: 100svh;
     display: flex;
-    justify-content: center;
+    flex-direction: column;
+    align-items: center;
     padding: 32px 18px 48px;
   }
-  /* Optional full-bleed background image (human page only). Sits behind a
-     dark scrim so text stays readable over any photo. */
-  body.has-bg::before {
-    content: ""; position: fixed; inset: 0; z-index: -2;
-    background-size: cover; background-position: center;
-    background-image: var(--bg-image);
-  }
-  body.has-bg::after {
-    content: ""; position: fixed; inset: 0; z-index: -1;
-    background: linear-gradient(180deg, rgba(20,10,17,0.55), rgba(20,10,17,0.82));
-  }
+  /* Background media — HUMAN page only; the bot/crawler page never emits any of
+     these elements (it always renders the plain gradient above). */
+  /* Full-bleed image or video behind everything, under a dark scrim so text
+     stays readable over any media. */
+  .bg-full { position: fixed; inset: 0; z-index: -2; overflow: hidden; }
+  .bg-full > img, .bg-full > video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .bg-scrim { content: ""; position: fixed; inset: 0; z-index: -1;
+    background: linear-gradient(180deg, rgba(20,10,17,0.55), rgba(20,10,17,0.82)); }
+  /* Top banner strip: full-bleed across the top, card flows below it. The
+     negative margins cancel the body padding so it reaches the edges. */
+  .banner { align-self: stretch; margin: -32px -18px 26px; height: clamp(150px, 34vh, 280px);
+    overflow: hidden; position: relative; }
+  .banner > img, .banner > video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .banner::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 55%;
+    background: linear-gradient(180deg, transparent, var(--bg)); pointer-events: none; }
   .card { width: 100%; max-width: 420px; }
   .avatar {
     width: 96px; height: 96px; border-radius: 50%;
@@ -137,6 +142,26 @@ function cardLogoHtml(l: LinkItem, forBot: boolean): string {
   return iconSvg("generic");
 }
 
+function backgroundMediaEl(cfg: PageConfig): string {
+  const url = (cfg.backgroundUrl || "").trim();
+  return cfg.backgroundMediaType === "video"
+    ? `<video src="${escapeAttr(url)}" autoplay muted loop playsinline preload="metadata"></video>`
+    : `<img src="${escapeAttr(url)}" alt="" referrerpolicy="no-referrer">`;
+}
+
+// HUMAN-only background markup, placed at the top of <body>. Returns "" when
+// there's no background or type is "none". The bot page NEVER calls this — a
+// crawler must only ever see the plain gradient (no photo, no video). This is
+// the same cloaking rule as the profile photo.
+function backgroundHtml(cfg: PageConfig): string {
+  const url = (cfg.backgroundUrl || "").trim();
+  const type = cfg.backgroundType || (url ? "full" : "none");
+  if (!url || type === "none") return "";
+  const media = backgroundMediaEl(cfg);
+  if (type === "banner") return `<div class="banner">${media}</div>`;
+  return `<div class="bg-full">${media}</div><div class="bg-scrim"></div>`;
+}
+
 function avatarHtml(cfg: PageConfig, forBot: boolean): string {
   // Bot page NEVER shows the real profile photo — initials only, always SFW.
   if (!forBot && cfg.avatarUrl) {
@@ -211,15 +236,6 @@ export function renderHumanPage(cfg: PageConfig, pageId: string): string {
     )
     .join("");
 
-  const hasBg = !!cfg.backgroundUrl;
-  const bodyClass = hasBg ? ' class="has-bg"' : "";
-  const bgStyle = hasBg ? ` style="--bg-image:url('${escapeAttr(cfg.backgroundUrl!)}')"` : "";
-  // If a background is expected but empty, show a subtle placeholder note so
-  // you can see where it goes during testing.
-  const bgPlaceholder = cfg.backgroundUrl === "" && "backgroundUrl" in cfg
-    ? "" // keep quiet by default; flip to a note if you want a visible marker
-    : "";
-
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -229,8 +245,8 @@ export function renderHumanPage(cfg: PageConfig, pageId: string): string {
 ${FONT_LINK}
 <style>${STYLE}</style>
 </head>
-<body${bodyClass}${bgStyle}>
-  ${bgPlaceholder}
+<body>
+  ${backgroundHtml(cfg)}
   <div class="card">
     ${avatarHtml(cfg, false)}
     <h1>${escapeHtml(cfg.modelName)}</h1>

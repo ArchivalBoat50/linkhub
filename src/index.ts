@@ -326,7 +326,11 @@ async function handleAdminConfig(request: Request, env: Env): Promise<Response> 
 // R2, returning a same-origin /media/<key> path. Requires the MEDIA binding;
 // without it, admins paste hosted URLs instead. Size-capped to keep an authed
 // but careless upload from writing an unbounded object.
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+// Images stay small; background videos are allowed larger but still capped so
+// an authed-but-careless upload can't write an unbounded object (and to stay
+// well within the Worker request-body limit, since we buffer it in memory).
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 30 * 1024 * 1024;
 async function handleAdminUpload(request: Request, env: Env): Promise<Response> {
   if (!checkBearer(request, env.ADMIN_TOKEN)) {
     return jsonResponse({ error: "unauthorized" }, 401);
@@ -335,11 +339,16 @@ async function handleAdminUpload(request: Request, env: Env): Promise<Response> 
   if (!env.MEDIA) return jsonResponse({ error: "R2 not configured — bind a MEDIA bucket or paste a hosted URL instead" }, 501);
 
   const contentType = request.headers.get("content-type") || "application/octet-stream";
-  if (!contentType.startsWith("image/")) return jsonResponse({ error: "only image uploads are allowed" }, 415);
+  const isImage = contentType.startsWith("image/");
+  const isVideo = contentType.startsWith("video/");
+  if (!isImage && !isVideo) return jsonResponse({ error: "only image or video uploads are allowed" }, 415);
 
   const buf = await request.arrayBuffer();
   if (buf.byteLength === 0) return jsonResponse({ error: "empty upload" }, 400);
-  if (buf.byteLength > MAX_UPLOAD_BYTES) return jsonResponse({ error: "file too large (max 5 MB)" }, 413);
+  const max = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+  if (buf.byteLength > max) {
+    return jsonResponse({ error: `file too large (max ${isVideo ? 30 : 5} MB)` }, 413);
+  }
 
   const ext = extForContentType(contentType);
   const key = `${crypto.randomUUID()}${ext}`;
@@ -385,6 +394,9 @@ function extForContentType(ct: string): string {
     "image/gif": ".gif",
     "image/svg+xml": ".svg",
     "image/avif": ".avif",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
   };
-  return map[ct.split(";")[0].trim()] || ".img";
+  return map[ct.split(";")[0].trim()] || ".bin";
 }

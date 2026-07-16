@@ -153,6 +153,18 @@ export function validateConfig(raw: unknown): ValidateResult {
     return { ok: false, error: "backgroundUrl must be an http(s) URL" };
   }
 
+  // Background layout + media type. Normalize to known values; if a url is set
+  // but no explicit type (legacy row), treat it as a full-bleed image.
+  const bgTypeRaw = str(r.backgroundType);
+  const backgroundType: PageConfig["backgroundType"] =
+    bgTypeRaw === "banner" || bgTypeRaw === "full" || bgTypeRaw === "none"
+      ? bgTypeRaw
+      : backgroundUrl
+        ? "full"
+        : "none";
+  const backgroundMediaType: PageConfig["backgroundMediaType"] =
+    str(r.backgroundMediaType) === "video" ? "video" : "image";
+
   const config: PageConfig = {
     modelName,
     handle: str(r.handle),
@@ -160,6 +172,8 @@ export function validateConfig(raw: unknown): ValidateResult {
     avatarInitials: str(r.avatarInitials) || modelName.slice(0, 1).toUpperCase(),
     avatarUrl,
     backgroundUrl,
+    backgroundType,
+    backgroundMediaType,
     ogDescription: str(r.ogDescription),
     links,
   };

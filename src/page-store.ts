@@ -164,6 +164,7 @@ export function validateConfig(raw: unknown): ValidateResult {
         : "none";
   const backgroundMediaType: PageConfig["backgroundMediaType"] =
     str(r.backgroundMediaType) === "video" ? "video" : "image";
+  const backgroundPosition = normalizePosition(str(r.backgroundPosition));
 
   const config: PageConfig = {
     modelName,
@@ -174,10 +175,26 @@ export function validateConfig(raw: unknown): ValidateResult {
     backgroundUrl,
     backgroundType,
     backgroundMediaType,
+    backgroundPosition,
     ogDescription: str(r.ogDescription),
     links,
   };
   return { ok: true, config };
+}
+
+// Background focal point, as a CSS object-position value.
+//
+// This is a hard trust boundary: render.ts interpolates the result straight
+// into a style attribute, so anything that isn't exactly "<num>% <num>%" would
+// be CSS injection. Rather than rejecting bad input (which would fail a save
+// over a cosmetic field), anything unrecognised collapses to the centred
+// default — the same thing plain object-fit: cover does. Never loosen this
+// regex to allow keywords, calc(), var(), or arbitrary units.
+function normalizePosition(s: string): string {
+  const m = /^(\d{1,3}(?:\.\d+)?)%[ ]+(\d{1,3}(?:\.\d+)?)%$/.exec(s.trim());
+  if (!m) return "50% 50%";
+  const clamp = (n: number) => Math.min(100, Math.max(0, Math.round(n * 10) / 10));
+  return `${clamp(parseFloat(m[1]))}% ${clamp(parseFloat(m[2]))}%`;
 }
 
 function isHttpUrl(s: string): boolean {

@@ -77,6 +77,27 @@ export function renderAdminShell(pageId: string, modelName: string): string {
   .banner-strip img, .banner-strip video { width: 100%; height: 100%; object-fit: cover; display:block; }
   .banner-strip::after { content:""; position:absolute; left:0; right:0; bottom:0; height:55%;
     background: linear-gradient(180deg, transparent, var(--stage-bg)); pointer-events:none; }
+
+  /* Background tools live on .stage, NOT inside .full-layer. .full-layer sets
+     z-index: 0, which makes it a stacking context — so a button nested inside
+     it can never paint above .stage-content (z-index: 1) however high its own
+     z-index is. That's what made the camera button visible but unclickable:
+     .stage-content covered it and swallowed the clicks. As a direct child of
+     .stage the button competes with .stage-content on equal terms and wins. */
+  .stage-tools { position: absolute; right: 10px; top: 10px; z-index: 4; display: flex; gap: 6px; }
+
+  /* Reposition mode: lift the background above the content so it can actually
+     be grabbed (in 'full' the media sits behind everything and is otherwise
+     unreachable), and drop the scrims so you can see what you're framing. */
+  .stage.repositioning .stage-content { opacity: 0.15; pointer-events: none; }
+  .stage.repositioning .full-layer { z-index: 2; }
+  .stage.repositioning .full-layer .scrim { opacity: 0; }
+  .stage.repositioning .banner-strip::after { opacity: 0; }
+  .stage.repositioning .bg-media { cursor: grab; touch-action: none; }
+  .stage.repositioning .bg-media.grabbing { cursor: grabbing; }
+  .reposition-hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6;
+    background: rgba(0,0,0,0.72); color: #fff; font-size: 11px; padding: 6px 12px; border-radius: 999px;
+    white-space: nowrap; pointer-events: none; }
   .bg-ph { display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:120px;
     background: repeating-linear-gradient(45deg,#33192a,#33192a 12px,#2c1524 12px,#2c1524 24px); color: var(--dim); font-size: 12px; }
 
@@ -116,10 +137,9 @@ export function renderAdminShell(pageId: string, modelName: string): string {
     border-radius: 14px; padding: 13px; font-size: 14px; font-weight: 600; }
 
   /* change buttons (overlay on avatar / background) */
-  .change-btn { position: absolute; z-index: 3; width: 30px; height: 30px; border-radius: 50%; background: var(--accent);
+  .change-btn { z-index: 3; width: 30px; height: 30px; border-radius: 50%; background: var(--accent);
     color: #201200; border: 2px solid var(--stage-bg); display:flex; align-items:center; justify-content:center; padding: 0; }
-  .change-btn.on-avatar { right: -2px; bottom: -2px; }
-  .change-btn.on-bg { right: 10px; top: 10px; }
+  .change-btn.on-avatar { position: absolute; right: -2px; bottom: -2px; }
 
   /* popovers */
   .overlay { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.6); display:none; align-items:center; justify-content:center; padding: 20px; }
@@ -254,6 +274,8 @@ var GLYPH = {
 var PENCIL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L20 8l-4-4L4 16v4z"/></svg>';
 var TRASH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
 var CAMERA = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3"/></svg>';
+var MOVE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>';
+var CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L19 7"/></svg>';
 
 var token = sessionStorage.getItem('lh_admin_token') || '';
 var state = null;
@@ -285,6 +307,7 @@ function normalize(cfg){
   cfg.links = cfg.links || [];
   cfg.backgroundType = cfg.backgroundType || (cfg.backgroundUrl ? 'full' : 'none');
   cfg.backgroundMediaType = cfg.backgroundMediaType || 'image';
+  cfg.backgroundPosition = cfg.backgroundPosition || '50% 50%';
   return cfg;
 }
 
@@ -308,33 +331,121 @@ function renderBgBar(){
 
 function mediaMarkup(url, mediaType){
   if(!url) return '';
+  var pos = esc(state.backgroundPosition || '50% 50%');
   return mediaType === 'video'
-    ? '<video src="'+esc(url)+'" autoplay muted loop playsinline></video>'
-    : '<img src="'+esc(url)+'" alt="">';
-}
-function changeBtnEl(kind){
-  var b = document.createElement('button');
-  b.type='button'; b.className='change-btn on-bg'; b.innerHTML=CAMERA; b.title='Change background';
-  b.addEventListener('click', function(){ openMedia('background'); });
-  return b;
+    ? '<video class="bg-media" src="'+esc(url)+'" style="object-position:'+pos+'" autoplay muted loop playsinline></video>'
+    : '<img class="bg-media" src="'+esc(url)+'" style="object-position:'+pos+'" alt="">';
 }
 function bgInnerHtml(){
   return state.backgroundUrl ? mediaMarkup(state.backgroundUrl, state.backgroundMediaType)
     : '<div class="bg-ph">+ Add ' + (state.backgroundMediaType==='video'?'video':'image') + '</div>';
 }
+
+// ---- background focal point (object-position) ----
+function bgPos(){
+  var p = String(state.backgroundPosition || '50% 50%').split(/\\s+/);
+  var x = parseFloat(p[0]), y = parseFloat(p[1]);
+  return { x: isNaN(x)?50:x, y: isNaN(y)?50:y };
+}
+function clampPct(n){ return Math.min(100, Math.max(0, Math.round(n*10)/10)); }
+function setBgPos(x, y){
+  state.backgroundPosition = clampPct(x)+'% '+clampPct(y)+'%';
+  var m = document.querySelector('.bg-media');
+  if(m) m.style.objectPosition = state.backgroundPosition;
+}
+
+// How many px the media overflows its frame on each axis under object-fit:
+// cover. That overflow IS the draggable range — dragging across it moves the
+// focal point 0%..100%, so the image tracks the cursor 1:1. If natural
+// dimensions aren't known yet (video metadata still loading), fall back to the
+// frame size: less exact, still usable.
+function overflowOf(el){
+  var fw = el.clientWidth, fh = el.clientHeight;
+  var nw = el.naturalWidth || el.videoWidth || 0;
+  var nh = el.naturalHeight || el.videoHeight || 0;
+  if(!nw || !nh || !fw || !fh) return { x: fw, y: fh };
+  var s = Math.max(fw/nw, fh/nh);
+  return { x: Math.max(0, nw*s - fw), y: Math.max(0, nh*s - fh) };
+}
+
+function attachDrag(el){
+  var start = null;
+  el.addEventListener('pointerdown', function(e){
+    if(!h('stage').classList.contains('repositioning')) return;
+    e.preventDefault();
+    var p = bgPos();
+    start = { mx:e.clientX, my:e.clientY, x:p.x, y:p.y, ov:overflowOf(el) };
+    try { el.setPointerCapture(e.pointerId); } catch(_){}
+    el.classList.add('grabbing');
+  });
+  el.addEventListener('pointermove', function(e){
+    if(!start) return;
+    // Dragging the image right reveals more of its LEFT edge, so the focal
+    // point moves left — hence the subtraction. An axis with no overflow has
+    // nothing to reveal and stays put.
+    var nx = start.ov.x > 0 ? start.x - (e.clientX-start.mx)/start.ov.x*100 : start.x;
+    var ny = start.ov.y > 0 ? start.y - (e.clientY-start.my)/start.ov.y*100 : start.y;
+    setBgPos(nx, ny);
+  });
+  ['pointerup','pointercancel'].forEach(function(t){
+    el.addEventListener(t, function(){ start=null; el.classList.remove('grabbing'); });
+  });
+}
+
+function toggleReposition(){
+  var st = h('stage');
+  st.classList.toggle('repositioning');
+  renderBackground();
+}
+
+function stageToolsEl(){
+  var wrap = document.createElement('div');
+  wrap.className = 'stage-tools';
+  var cam = document.createElement('button');
+  cam.type='button'; cam.className='change-btn'; cam.innerHTML=CAMERA; cam.title='Change background';
+  cam.addEventListener('click', function(){ openMedia('background'); });
+  wrap.appendChild(cam);
+  // Repositioning only means anything once there's media to reposition.
+  if(state.backgroundUrl){
+    var on = h('stage').classList.contains('repositioning');
+    var mv = document.createElement('button');
+    mv.type='button'; mv.className='change-btn';
+    mv.innerHTML = on ? CHECK : MOVE;
+    mv.title = on ? 'Done repositioning' : 'Reposition background';
+    mv.addEventListener('click', toggleReposition);
+    wrap.appendChild(mv);
+  }
+  return wrap;
+}
+
 function renderBackground(){
-  var full=h('fullLayer'), banner=h('bannerSlot');
+  var stage=h('stage'), full=h('fullLayer'), banner=h('bannerSlot');
   full.innerHTML=''; banner.innerHTML='';
+  var old = stage.querySelector('.stage-tools'); if(old) old.remove();
+  var hint = stage.querySelector('.reposition-hint'); if(hint) hint.remove();
+
   var type = state.backgroundType || 'none';
-  if(type==='none') return;
+  if(type==='none'){ stage.classList.remove('repositioning'); return; }
+
   if(type==='full'){
     full.innerHTML = bgInnerHtml() + '<div class="scrim"></div>';
-    full.appendChild(changeBtnEl());
   } else {
     var strip=document.createElement('div'); strip.className='banner-strip';
     strip.innerHTML = bgInnerHtml();
-    strip.appendChild(changeBtnEl());
     banner.appendChild(strip);
+  }
+  // Tools are a direct child of .stage — see the .stage-tools CSS note for why
+  // they must not live inside .full-layer.
+  stage.appendChild(stageToolsEl());
+
+  var media = stage.querySelector('.bg-media');
+  if(media) attachDrag(media);
+  if(!state.backgroundUrl) stage.classList.remove('repositioning');
+  if(stage.classList.contains('repositioning') && media){
+    var hp = document.createElement('div');
+    hp.className='reposition-hint';
+    hp.textContent='Drag to reposition — tap ✓ when done';
+    stage.appendChild(hp);
   }
 }
 

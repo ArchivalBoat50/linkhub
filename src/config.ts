@@ -53,6 +53,17 @@ export interface PageConfig {
   backgroundType?: BackgroundType;         // default "none" (or "full" if a url is set pre-migration)
   backgroundMediaType?: BackgroundMediaType; // default "image"
 
+  // Focal point for the background, as a CSS object-position value ("X% Y%").
+  // The media is object-fit: cover, so it always overflows its frame on one
+  // axis; this picks which part stays visible. "50% 50%" (centred) is the
+  // default and matches plain object-fit: cover.
+  //
+  // SECURITY: this string is interpolated into a style attribute by render.ts,
+  // so it MUST stay strictly "<number>% <number>%" — validateConfig in
+  // page-store.ts is the only thing standing between this and CSS injection.
+  // Never widen it to accept arbitrary CSS.
+  backgroundPosition?: string;
+
   ogDescription: string;       // shown in Instagram/Meta link previews — keep generic, nothing that reads as the flagged category
   links: LinkItem[];
 }

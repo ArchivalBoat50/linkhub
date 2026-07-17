@@ -169,9 +169,14 @@ function cardLogoHtml(l: LinkItem, forBot: boolean): string {
 
 function backgroundMediaEl(cfg: PageConfig): string {
   const url = (cfg.backgroundUrl || "").trim();
+  // The media is object-fit: cover, so it overflows its frame on one axis and
+  // the focal point decides what survives the crop. validateConfig guarantees
+  // this is "<num>% <num>%" — it lands in a style attribute, so nothing else
+  // may ever reach here (see the SECURITY note on PageConfig.backgroundPosition).
+  const style = ` style="object-position:${escapeAttr(cfg.backgroundPosition || "50% 50%")}"`;
   return cfg.backgroundMediaType === "video"
-    ? `<video src="${escapeAttr(url)}" autoplay muted loop playsinline preload="metadata"></video>`
-    : `<img src="${escapeAttr(url)}" alt="" referrerpolicy="no-referrer">`;
+    ? `<video src="${escapeAttr(url)}"${style} autoplay muted loop playsinline preload="metadata"></video>`
+    : `<img src="${escapeAttr(url)}"${style} alt="" referrerpolicy="no-referrer">`;
 }
 
 // HUMAN-only background markup, placed at the top of <body>. Returns "" when

@@ -5,6 +5,33 @@ import { PageConfig, LinkItem } from "./config";
 // mauve accents, serif display paired with a geometric sans. Deliberately
 // not the cream/terracotta or near-black/neon defaults.
 const STYLE = `
+  /* Self-hosted, same-origin webfonts (served from R2 via /media/, see
+     handleMedia in index.ts). These used to load from fonts.googleapis.com as a
+     render-blocking <link rel="stylesheet">, which then pulled the woff2 from
+     fonts.gstatic.com — two extra DNS lookups + TLS handshakes before a single
+     character could paint. This page's traffic is all Instagram mobile on
+     cellular, where that latency is the difference between a tap and a bounce.
+     Declaring @font-face here in the inline STYLE means zero blocking external
+     requests: the rules are parsed immediately and the fonts swap in on arrival.
+     Both files are VARIABLE fonts — one file spans the whole weight range, so
+     listing extra weights costs no extra bytes (and trimming them saves none).
+     Latin subset only: non-latin text falls back to the system stack below. */
+  @font-face {
+    font-family: 'Fraunces';
+    font-style: normal;
+    font-weight: 500 600;
+    src: url(/media/fraunces-latin.woff2) format('woff2');
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'Manrope';
+    font-style: normal;
+    font-weight: 500 700;
+    src: url(/media/manrope-latin.woff2) format('woff2');
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
   :root {
     --bg: #241220;
     --bg-card: #2E1826;
@@ -98,8 +125,6 @@ const STYLE = `
   .link-arrow { color: var(--text-dim); font-size: 18px; }
   .foot { text-align: center; margin-top: 34px; color: var(--text-dim); font-size: 11px; letter-spacing: 0.4px; }
 `;
-
-const FONT_LINK = `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">`;
 
 function iconSvg(kind: string): string {
   switch (kind) {
@@ -202,7 +227,6 @@ export function renderBotPage(cfg: PageConfig, canonicalUrl: string): string {
 <meta property="og:type" content="profile">
 <meta property="og:url" content="${escapeAttr(canonicalUrl)}">
 <meta name="robots" content="index, follow">
-${FONT_LINK}
 <style>${STYLE}</style>
 </head>
 <body>
@@ -242,7 +266,6 @@ export function renderHumanPage(cfg: PageConfig, pageId: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(cfg.modelName)}</title>
-${FONT_LINK}
 <style>${STYLE}</style>
 </head>
 <body>

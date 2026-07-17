@@ -63,9 +63,14 @@ export const pageConfig: PageConfig = {
   tagline: "New drops every week — tap in below",
   avatarInitials: "M",
 
-  // TODO: paste a hosted https URL to a CLEAN/SFW profile photo here.
-  // Leave "" to show the "M" initials avatar until you have one.
-  avatarUrl: "https://pub-d8929465aa2c4a2290263cc28ca63ce2.r2.dev/photo_2025-11-23_23-57-56.jpg",
+  // Served same-origin from the MEDIA bucket via /media/<key> (see handleMedia
+  // in index.ts). Keep it same-origin: a cross-origin avatar host costs a fresh
+  // DNS lookup + TLS handshake (~160ms on cellular) before the face can paint,
+  // and this page's whole job is one fast tap.
+  // Pre-sized to 288x288 (3x the 96px .avatar box) — do not point this at a
+  // full-resolution photo. The original here was 1920x2560 / 412KB to fill a
+  // 96px circle; resized + q80 it is ~20KB, a 95% cut with no visible change.
+  avatarUrl: "/media/avatar-288.jpg",
   backgroundUrl: "",
 
   ogDescription: "Official links and updates.",

@@ -69,7 +69,12 @@ export function renderAdminShell(pageId: string, modelName: string): string {
   .stage { position: relative; width: 100%; max-width: 440px; margin: 20px auto 40px; border-radius: 24px; overflow: hidden;
     background: radial-gradient(120% 100% at 50% -10%, #34192C 0%, var(--stage-bg) 55%); min-height: 580px;
     display:flex; flex-direction: column; box-shadow: 0 24px 70px -24px #000, 0 0 0 1px var(--line); }
-  .full-layer { position: absolute; inset: 0; z-index: 0; }
+  /* pointer-events:none is load-bearing. .full-layer is inset:0 across the WHOLE
+     stage and it exists even in banner mode, just empty — so when reposition
+     mode lifts it to z-index:2 it floated an invisible empty div over the banner
+     strip and swallowed the drag. A layout container must never hit-test; only
+     real media opts back in (see .stage.repositioning .bg-media below). */
+  .full-layer { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
   .full-layer img, .full-layer video { width: 100%; height: 100%; object-fit: cover; display:block; }
   /* pointer-events:none is load-bearing, not cosmetic: the scrim is inset:0 over
      the background media, so without it it swallows every pointerdown meant for
@@ -98,7 +103,10 @@ export function renderAdminShell(pageId: string, modelName: string): string {
   .stage.repositioning .full-layer { z-index: 2; }
   .stage.repositioning .full-layer .scrim { opacity: 0; }
   .stage.repositioning .banner-strip::after { opacity: 0; }
-  .stage.repositioning .bg-media { cursor: grab; touch-action: none; }
+  /* The only thing in the stage that hit-tests while repositioning. pointer-events
+     is auto ONLY here, so the background can be grabbed during reposition and is
+     inert the rest of the time. */
+  .stage.repositioning .bg-media { pointer-events: auto; cursor: grab; touch-action: none; }
   .stage.repositioning .bg-media.grabbing { cursor: grabbing; }
   .reposition-hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6;
     background: rgba(0,0,0,0.72); color: #fff; font-size: 11px; padding: 6px 12px; border-radius: 999px;

@@ -2,6 +2,19 @@ name = "linkhub"
 main = "src/index.ts"
 compatibility_date = "2026-07-01"
 
+# Custom domain for the creator's page. This is the ONLY public door to the funnel —
+# workers.dev is disabled below because *.workers.dev is a shared, non-rotatable
+# domain and must never front a bio link (ARCHITECTURE.md §14.4).
+#
+# This domain is DISPOSABLE by design. When it gets flagged, register a fresh
+# clean one and swap it here — do not try to rehabilitate a flagged domain.
+# Check any replacement's history (Wayback + whois) before buying: `examplecreator.com`
+# was rejected because it was a Polish erotic-lingerie shop promoted on IG/FB
+# from 2019-2024, i.e. pre-flagged by the exact system we're avoiding.
+routes = [
+  { pattern = "example-links.com", custom_domain = true }
+]
+
 # One Worker deploy = one model's page for now (per-model deploy, per your call).
 # When you go multi-tenant later, this same schema already supports it —
 # just add a router keyed on hostname/path and stop hardcoding PAGE_ID.

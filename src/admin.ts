@@ -71,7 +71,12 @@ export function renderAdminShell(pageId: string, modelName: string): string {
     display:flex; flex-direction: column; box-shadow: 0 24px 70px -24px #000, 0 0 0 1px var(--line); }
   .full-layer { position: absolute; inset: 0; z-index: 0; }
   .full-layer img, .full-layer video { width: 100%; height: 100%; object-fit: cover; display:block; }
-  .full-layer .scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(20,10,17,0.5), rgba(20,10,17,0.82)); }
+  /* pointer-events:none is load-bearing, not cosmetic: the scrim is inset:0 over
+     the background media, so without it it swallows every pointerdown meant for
+     the image and drag-to-reposition silently does nothing. opacity:0 alone does
+     NOT stop hit-testing. The banner's ::after gradient has the same guard. */
+  .full-layer .scrim { position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(20,10,17,0.5), rgba(20,10,17,0.82)); }
   #bannerSlot { position: relative; z-index: 1; }
   .banner-strip { position: relative; width: 100%; height: 160px; overflow: hidden; }
   .banner-strip img, .banner-strip video { width: 100%; height: 100%; object-fit: cover; display:block; }
@@ -446,6 +451,20 @@ function renderBackground(){
     hp.className='reposition-hint';
     hp.textContent='Drag to reposition — tap ✓ when done';
     stage.appendChild(hp);
+    // Under object-fit: cover the media only overflows on ONE axis, and the
+    // other axis genuinely cannot move — a landscape photo in the tall 'full'
+    // frame slides horizontally only; the same photo in the short 'banner'
+    // strip slides vertically only. Say which, or a dead axis reads as a bug.
+    var say = function(){
+      var ov = overflowOf(media), x = ov.x > 1, y = ov.y > 1;
+      hp.textContent = x && y ? 'Drag to reposition — tap ✓ when done'
+        : x ? 'Drag left/right to reposition — tap ✓ when done'
+        : y ? 'Drag up/down to reposition — tap ✓ when done'
+        : 'This image already fits — nothing to reposition';
+    };
+    // naturalWidth is 0 until the media has actually loaded.
+    if(media.complete || media.videoWidth) say();
+    else media.addEventListener(media.tagName==='VIDEO' ? 'loadedmetadata' : 'load', say);
   }
 }
 

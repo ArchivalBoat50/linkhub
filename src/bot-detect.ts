@@ -63,6 +63,20 @@ export function classifyRequest(request: Request, opts: ClassifyOpts = {}): Clas
   const cf = (request as unknown as { cf?: { asn?: number } }).cf;
   const asn = cf?.asn;
 
+  // Network gate — runs BEFORE the human/webview checks on purpose. Any request
+  // originating from Meta's own network (ASN 32934) is treated as a crawler
+  // even when it carries a plain human browser UA. No real Instagram visitor is
+  // ever on Meta's ASN — their traffic comes from mobile carriers / residential
+  // ISPs — so this has zero false positives for actual fans while closing the
+  // "human reviewer browsing from Meta's network" gap that UA detection alone
+  // leaves open. A declared crawler keeps its specific botType; a plain browser
+  // on Meta's net is tagged "meta-asn-browser" so analytics can tell "IG's
+  // scanner fetched my link" apart from "someone at Meta opened it in a browser".
+  if (asn === META_ASN) {
+    const declared = META_CRAWLER_PATTERNS.find(([p]) => p.test(ua));
+    return { kind: "meta_crawler", botType: declared ? declared[1] : "meta-asn-browser" };
+  }
+
   // Real humans in in-app webviews first — highest priority, never a bot.
   if (IG_WEBVIEW_PATTERN.test(ua)) {
     return { kind: "human", isIgWebview: true };

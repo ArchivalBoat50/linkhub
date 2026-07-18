@@ -174,9 +174,19 @@ function backgroundMediaEl(cfg: PageConfig): string {
   // this is "<num>% <num>%" — it lands in a style attribute, so nothing else
   // may ever reach here (see the SECURITY note on PageConfig.backgroundPosition).
   const style = ` style="object-position:${escapeAttr(cfg.backgroundPosition || "50% 50%")}"`;
-  return cfg.backgroundMediaType === "video"
-    ? `<video src="${escapeAttr(url)}"${style} autoplay muted loop playsinline preload="metadata"></video>`
-    : `<img src="${escapeAttr(url)}"${style} alt="" referrerpolicy="no-referrer">`;
+  if (cfg.backgroundMediaType === "video") {
+    // iOS blocks muted-video autoplay whenever Low Power Mode or Low Data Mode
+    // is on — the correct autoplay/muted/playsinline attributes don't override
+    // it. With no poster, WebKit then paints a blank/black frame. Appending a
+    // #t=0.001 media fragment forces it to seek to and render the first frame,
+    // which stands in as a static poster until (and if) autoplay runs — no
+    // separate poster asset to generate or store, and the frame IS the video's
+    // first frame, exactly as wanted. The 0.001s offset is imperceptible when
+    // autoplay does fire. Skip if the URL already carries a fragment.
+    const posterUrl = url.includes("#") ? url : `${url}#t=0.001`;
+    return `<video src="${escapeAttr(posterUrl)}"${style} autoplay muted loop playsinline preload="metadata"></video>`;
+  }
+  return `<img src="${escapeAttr(url)}"${style} alt="" referrerpolicy="no-referrer">`;
 }
 
 // HUMAN-only background markup, placed at the top of <body>. Returns "" when

@@ -339,8 +339,29 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, iosEscape = fal
 // read from location.origin, since Instagram opens bio links over http://.
 // Keep comments OUT of the emitted string below — those bytes ship to every
 // iOS visitor.
+//
+// TWO escapes live here, and they cover different taps:
+//
+// 1. ON LOAD — moves the whole page to Chrome, so the BIO-LINK tap escapes too,
+//    not just the card. This one needs no timer or fallback: if the scheme is
+//    refused the visitor simply stays on the page they are already looking at,
+//    which is the pre-existing behaviour. Guarded by sessionStorage so
+//    returning to the Instagram tab doesn't yank the visitor out again, and the
+//    Chrome-bound URL carries `x=1` so handleIndex doesn't double-count the
+//    visit. No loop is possible: Chrome isn't a webview, so it is never served
+//    this script.
+// 2. ON CARD TAP — the fallback for when (1) didn't fire (no Chrome, or the
+//    load-time attempt was refused for want of a gesture). Still needed.
 const IOS_ESCAPE_SCRIPT = `<script>
 (function () {
+  try {
+    if (!sessionStorage.getItem('esc')) {
+      sessionStorage.setItem('esc', '1');
+      location.href = 'googlechromes://' + location.host + location.pathname +
+        (location.search ? location.search + '&' : '?') + 'x=1';
+    }
+  } catch (err) {}
+
   var links = document.getElementById('links');
   if (!links) return;
   var timer = null;

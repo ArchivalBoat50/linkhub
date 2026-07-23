@@ -149,20 +149,25 @@ async function handleIndex(request: Request, env: Env, ctx: ExecutionContext, ur
   const botType = cls.kind === "meta_crawler" || cls.kind === "generic_bot" ? cls.botType : null;
   const isIgWebview = cls.kind === "human" && cls.isIgWebview;
 
-  ctx.waitUntil(
-    logVisit(env, {
-      pageId: env.PAGE_ID,
-      isBot,
-      botType,
-      isIgWebview,
-      country: c.country,
-      device: c.device,
-      browser: c.browser,
-      referrer: c.referrer,
-      utm: c.utm,
-      visitorHash,
-    })
-  );
+  // `x=1` marks the page re-opening in Chrome after the load-time escape. It's
+  // the same visitor continuing the same visit, already counted on the webview
+  // hop — logging it again would double every escaped visit.
+  if (!url.searchParams.has("x")) {
+    ctx.waitUntil(
+      logVisit(env, {
+        pageId: env.PAGE_ID,
+        isBot,
+        botType,
+        isIgWebview,
+        country: c.country,
+        device: c.device,
+        browser: c.browser,
+        referrer: c.referrer,
+        utm: c.utm,
+        visitorHash,
+      })
+    );
+  }
 
   if (isBot) {
     return new Response(renderBotPage(pageConfig, url.origin + "/"), {

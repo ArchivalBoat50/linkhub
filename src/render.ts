@@ -364,7 +364,10 @@ const IOS_ESCAPE_SCRIPT = `<script>
     var path = a.getAttribute('data-go');
     if (!path) return;
     cancel();
-    timer = setTimeout(function () { a.setAttribute('href', path); location.href = path; }, 1200);
+    timer = setTimeout(function () {
+      a.setAttribute('href', path);
+      location.href = path + (path.indexOf('?') > -1 ? '&' : '?') + 'e=to';
+    }, 1200);
   });
 })();
 </script>`;

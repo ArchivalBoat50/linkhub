@@ -192,9 +192,10 @@ never inside an intent URI, a custom-scheme string, or an HTML body.
 #### What works, established by probe — not by reasoning
 
 Three iOS fixes failed in a row. Rather than guess a fourth scheme, a probe
-page (`/escape-test`) fired every candidate at a URL **on our own domain**, so
-a working scheme records its own success: the escaping browser arrives with its
-own User-Agent, and that arrival is the proof. On an iPhone 17 Pro Max / iOS 26:
+page fired every candidate at a URL **on our own domain**, so a working scheme
+records its own success: the escaping browser arrives with its own User-Agent,
+and that arrival is the proof. The probe and its `debug_events` table have
+since been removed. On an iPhone 17 Pro Max / iOS 26:
 
 | Scheme | Result |
 | --- | --- |

@@ -1,5 +1,5 @@
 import { classifyRequest, deviceFromUA, browserFromUA, isInAppWebview, ClassifyOpts } from "./bot-detect";
-import { renderBotPage, renderHumanPage, renderBounce, renderEscapeTest } from "./render";
+import { renderBotPage, renderHumanPage, renderBounce } from "./render";
 import { renderDashboardShell } from "./dashboard";
 import { renderAdminShell } from "./admin";
 import { loadPageConfig, savePageConfig, ConfigValidationError } from "./page-store";
@@ -54,25 +54,6 @@ export default {
     if (path.startsWith("/icon/")) {
       return handleIcon(request, env, url);
     }
-    // TEMPORARY (2026-07-23) — iOS escape scheme probe. Delete with the rest.
-    if (path === "/escape-test") {
-      return new Response(renderEscapeTest(), {
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-      });
-    }
-    if (path === "/escape-hit") {
-      const ua = request.headers.get("User-Agent") || "";
-      ctx.waitUntil(
-        debugEvent(env, url.searchParams.get("tap") ? "tap" : "HIT", {
-          s: url.searchParams.get("s"),
-          webview: isInAppWebview(ua),
-          ua: ua.slice(0, 110),
-        })
-      );
-      return new Response("recorded — go back to Instagram and try the next one", {
-        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-      });
-    }
     if (path === "/robots.txt") {
       return handleRobots();
     }
@@ -106,21 +87,6 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
-
-// TEMPORARY (2026-07-23) — writes to the throwaway `debug_events` table so the
-// iOS escape can be diagnosed from the owner's actual handset instead of asking
-// him to describe what he saw. `wrangler tail` was the obvious tool and doesn't
-// work from this non-interactive session (output buffers with no TTY).
-// DELETE THIS, both call sites, and the table once the escape is settled.
-async function debugEvent(env: Env, tag: string, detail: unknown): Promise<void> {
-  try {
-    await env.DB.prepare("INSERT INTO debug_events (ts, tag, detail) VALUES (?, ?, ?)")
-      .bind(Date.now(), tag, JSON.stringify(detail))
-      .run();
-  } catch {
-    // Diagnostics must never break a real request.
-  }
-}
 
 // Shared per-request context extraction (used by index + go).
 function extractCtx(request: Request, url: URL) {
@@ -183,10 +149,6 @@ async function handleIndex(request: Request, env: Env, ctx: ExecutionContext, ur
   // iOS in-app webviews get the escape script; nobody else pays its bytes.
   const iosEscape = isInAppWebview(c.ua) && /iphone|ipad|ipod/i.test(c.ua);
 
-  // TEMPORARY DIAGNOSTIC (2026-07-23) — pairs with the one in handleGo. Tells
-  // us whether the escape script was actually served to the visitor's device.
-  ctx.waitUntil(debugEvent(env, "page", { iosEscape, proto: url.protocol, ua: c.ua.slice(0, 110) }));
-
   return new Response(renderHumanPage(pageConfig, env.PAGE_ID, iosEscape), {
     headers: {
       "content-type": "text/html; charset=utf-8",
@@ -212,22 +174,6 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
   }
 
   const cls = classifyRequest(request, classifyOpts(request));
-
-  // TEMPORARY DIAGNOSTIC (2026-07-23) — remove once the iOS escape is settled.
-  // Three fixes have failed with no way to tell WHICH stage broke, so the page
-  // now encodes the outcome in the URL it lands on and we read it off the tail:
-  //   /go/<id>          -> the escape script never ran (or pointerdown didn't fire)
-  //   /go/<id>?e=to     -> script ran, scheme attempted, iOS refused it (timer won)
-  //   /go/<id>?b=1      -> escape worked; this hop is the real browser
-  // Watch with: npx wrangler tail --format pretty
-  ctx.waitUntil(
-    debugEvent(env, "go", {
-      q: url.search || "(none)",
-      kind: cls.kind,
-      webview: isInAppWebview(request.headers.get("User-Agent") || ""),
-      ua: (request.headers.get("User-Agent") || "").slice(0, 110),
-    })
-  );
 
   if (cls.kind !== "human") {
     // Crawler/scraper: never reveal the real URL. Bounce to the clean index.

@@ -1,5 +1,5 @@
 import { classifyRequest, deviceFromUA, browserFromUA, isInAppWebview, ClassifyOpts } from "./bot-detect";
-import { renderBotPage, renderHumanPage, renderBounce } from "./render";
+import { renderBotPage, renderHumanPage, renderBounce, renderEscapeTest } from "./render";
 import { renderDashboardShell } from "./dashboard";
 import { renderAdminShell } from "./admin";
 import { loadPageConfig, savePageConfig, ConfigValidationError } from "./page-store";
@@ -32,7 +32,15 @@ export default {
     //   3. location.origin was http:, so the iOS escape built an
     //      x-safari-http:// URL instead of x-safari-https://.
     // Cheap to fix here and it applies to every route at once.
-    if (url.protocol === "http:" && !isLocalHost(url.hostname)) {
+    // `cf-visitor` is the signal, NOT url.protocol or the Host header: under
+    // `wrangler dev` BOTH of those read "example-links.com" over http (verified —
+    // wrangler rewrites request.url to the custom_domain route and the Host
+    // header with it), so a host-based check redirects every local request to
+    // production. cf-visitor is added by Cloudflare's edge, states the scheme
+    // the visitor really used, and is absent in local dev — so this fires in
+    // production only, exactly when someone arrived over http.
+    const cfVisitor = request.headers.get("cf-visitor");
+    if (cfVisitor && cfVisitor.includes('"scheme":"http"')) {
       url.protocol = "https:";
       return Response.redirect(url.toString(), 301);
     }
@@ -45,6 +53,25 @@ export default {
     }
     if (path.startsWith("/icon/")) {
       return handleIcon(request, env, url);
+    }
+    // TEMPORARY (2026-07-23) — iOS escape scheme probe. Delete with the rest.
+    if (path === "/escape-test") {
+      return new Response(renderEscapeTest(), {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+    if (path === "/escape-hit") {
+      const ua = request.headers.get("User-Agent") || "";
+      ctx.waitUntil(
+        debugEvent(env, url.searchParams.get("tap") ? "tap" : "HIT", {
+          s: url.searchParams.get("s"),
+          webview: isInAppWebview(ua),
+          ua: ua.slice(0, 110),
+        })
+      );
+      return new Response("recorded — go back to Instagram and try the next one", {
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+      });
     }
     if (path === "/robots.txt") {
       return handleRobots();
@@ -204,11 +231,24 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
     });
   }
 
-  // Human. Log the tap server-side — but only on the FIRST hop. A webview
-  // escape re-enters this handler from the real browser carrying ESCAPED_PARAM,
-  // and that second request is the same tap, not a new one. One tap, one row.
+  // Human. Exactly one link_clicks row per tap, which needs care because the
+  // two platforms escape at different points:
+  //
+  // - ANDROID escapes server-side. The webview's request reaches us first and
+  //   is logged here; the default browser then re-enters carrying `b=a`, and
+  //   that hop must NOT log again — it is the same tap.
+  // - iOS escapes on the page, before any request is made. The webview never
+  //   reaches the server at all, so the `b=i` hop from Chrome is the ONLY
+  //   record of the tap and MUST be logged. (Suppressing it, as an earlier
+  //   revision did, silently dropped every successfully-escaped click from
+  //   analytics — the escape working would have looked like traffic vanishing.)
+  //
+  // `e=to` is the iOS fallback hop: the escape was refused, so this request is
+  // the tap, and it logs like any other.
   const c = extractCtx(request, url);
-  if (!url.searchParams.has(ESCAPED_PARAM)) {
+  const escapeMark = url.searchParams.get(ESCAPED_PARAM);
+
+  if (escapeMark !== "a") {
     const visitorHash = await hashVisitor(c.ip, env.VISITOR_SALT || "dev-salt");
     ctx.waitUntil(
       logClick(env, {
@@ -221,9 +261,12 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
         visitorHash,
       })
     );
+  }
 
-    // Android in-app webview: hand the tap to the device's default browser
-    // instead of 302-ing inside Instagram's WebView. See androidEscape().
+  // Android in-app webview: hand the tap to the device's default browser
+  // instead of 302-ing inside Instagram's WebView. Any escape mark means we
+  // already tried, so never attempt a second time — that would loop.
+  if (escapeMark === null) {
     const intent = androidEscape(c.ua, url);
     if (intent) {
       return new Response(null, {
@@ -245,7 +288,10 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
 
 // Marks the second hop of a webview escape: the request the real browser makes
 // after we hand the link off to it. Its presence means "already escaped, don't
-// try again and don't re-log the click".
+// try again". The VALUE says which platform escaped, which decides whether this
+// hop is the one that logs the click — see handleGo.
+//   b=a  Android, escaped server-side; the webview hop already logged
+//   b=i  iOS, escaped on the page; this hop is the only record of the tap
 const ESCAPED_PARAM = "b";
 
 // Breaks an ANDROID in-app-browser tap (Instagram's WebView and friends) out
@@ -274,7 +320,7 @@ function androidEscape(ua: string, url: URL): string | null {
 
   // Same /go/<id>, same query (UTMs preserved), plus the already-escaped mark.
   const next = new URL(url.toString());
-  next.searchParams.set(ESCAPED_PARAM, "1");
+  next.searchParams.set(ESCAPED_PARAM, "a");
   // scheme=https below is a promise about this URL — make it true rather than
   // trusting how the request arrived (Instagram opens bio links over http).
   if (!isLocalHost(next.hostname)) next.protocol = "https:";

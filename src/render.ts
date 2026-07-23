@@ -319,20 +319,26 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, iosEscape = fal
 // Safari comes forward, this page is backgrounded, and visibilitychange /
 // pagehide cancels the timer so the webview doesn't chase the link too.
 // A refused escape must never cost the click.
-// NOTE ON MECHANISM (2026-07-23, two failed rounds on a real iPhone / iOS 26):
-// assigning `location.href = 'x-safari-...'` is refused by Instagram's iOS
-// webview — both on page load (no gesture) AND from inside a click handler
-// (real gesture). So the blocker is not the gesture, it's the scripted
-// navigation itself. This version therefore never scripts the navigation: it
-// rewrites the card's own href on pointerdown, and the tap that follows is an
-// ordinary native anchor navigation to the scheme — the strongest signal iOS
-// will accept. The href starts as /go/<id> and is only swapped once a tap has
-// begun, so a no-JS visitor still gets a working link.
+// MECHANISM, established by probing a real iPhone 17 Pro Max on iOS 26
+// (2026-07-23) rather than by reasoning — every assumption below was tested:
 //
-// The scheme is hard-coded to https rather than read from location.origin:
-// Instagram opens bio links over http:// (the Worker now 301s those, but this
-// keeps the escape correct even if that ever changes). Comments stay OUT of
-// the emitted string below — those bytes ship to every iOS visitor.
+// - `x-safari-https://` and `com-apple-mobilesafari-tab://` are REFUSED. Not
+//   gesture-blocked — dead. They were tried on page load, from a click handler,
+//   and as a native anchor activation. Nothing arrived. Do not retry these.
+// - `googlechrome://` and `googlechromes://` WORK: the request arrives at the
+//   server with a CriOS User-Agent, proving a real escape out of the webview.
+//
+// **Safari cannot be targeted at all.** Apple registers no public URL scheme
+// for it, so a visitor whose only browser is Safari necessarily stays in the
+// webview. That is an OS limit, not a gap in this code. In practice the escape
+// only fires when Chrome is installed — which is also a decent proxy for "this
+// person actually uses Chrome", i.e. their logged-in session lives there.
+//
+// The navigation is a native anchor activation (href swapped on pointerdown),
+// not a scripted one, and the scheme's host is hard-coded https rather than
+// read from location.origin, since Instagram opens bio links over http://.
+// Keep comments OUT of the emitted string below — those bytes ship to every
+// iOS visitor.
 const IOS_ESCAPE_SCRIPT = `<script>
 (function () {
   var links = document.getElementById('links');
@@ -353,7 +359,7 @@ const IOS_ESCAPE_SCRIPT = `<script>
     if (!a) return;
     var path = a.getAttribute('data-go');
     if (!path) { path = a.getAttribute('href'); a.setAttribute('data-go', path); }
-    a.setAttribute('href', 'x-safari-https://' + location.host + path + (path.indexOf('?') > -1 ? '&' : '?') + 'b=1');
+    a.setAttribute('href', 'googlechromes://' + location.host + path + (path.indexOf('?') > -1 ? '&' : '?') + 'b=i');
   });
 
   // Safety net: if iOS silently drops the scheme, nothing happens at all, so
@@ -371,6 +377,75 @@ const IOS_ESCAPE_SCRIPT = `<script>
   });
 })();
 </script>`;
+
+// TEMPORARY (2026-07-23) — scheme probe for the iOS escape. x-safari-https://
+// is confirmed refused by Instagram's webview on iOS 26 (the owner's tap logged
+// ?e=to, i.e. the fallback timer fired), so this tries every other candidate in
+// one pass on the real handset instead of guessing one per round trip.
+//
+// Self-recording by design: each button's href is a scheme pointing at
+// /escape-hit on OUR OWN domain. If a scheme works, the browser that opens
+// requests that URL and arrives with a non-Instagram User-Agent — that arrival
+// IS the proof, so nothing depends on the owner describing what he saw. A tap
+// beacon fires first so a scheme that does nothing is distinguishable from a
+// button that was never pressed.
+//
+// No destination anywhere on this page. DELETE with the rest of the diagnostic.
+export function renderEscapeTest(): string {
+  const probes: [string, string][] = [
+    ["x-safari", "x-safari-https://HOST/escape-hit?s=x-safari"],
+    ["chrome (http)", "googlechrome://HOST/escape-hit?s=chrome"],
+    ["chrome (https)", "googlechromes://HOST/escape-hit?s=chromes"],
+    ["safari-tab (private)", "com-apple-mobilesafari-tab://HOST/escape-hit?s=safari-tab"],
+    ["firefox", "firefox://open-url?url=https%3A%2F%2FHOST%2Fescape-hit%3Fs%3Dfirefox"],
+    ["plain https (control)", "https://HOST/escape-hit?s=control"],
+  ];
+  const buttons = probes
+    .map(
+      ([label, tpl], i) =>
+        `<a class="probe" data-s="${escapeAttr(label)}" data-tpl="${escapeAttr(tpl)}" href="#">${i + 1}. ${escapeHtml(label)}</a>`
+    )
+    .join("");
+
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Escape probe</title>
+<style>
+  body { background:#241220; color:#fff; margin:0; padding:22px;
+    font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif; }
+  h1 { font-size:17px; margin:0 0 6px; }
+  p { font-size:13px; line-height:1.5; color:rgba(255,255,255,0.6); margin:0 0 18px; }
+  .probe { display:block; padding:15px 16px; margin-bottom:10px; border-radius:12px;
+    background:#3a2130; color:#fff; text-decoration:none; font-size:15px; }
+  .probe:active { background:#4a2b3e; }
+  .done { opacity:0.45; }
+</style>
+</head><body>
+<h1>Browser-escape probe</h1>
+<p>Tap each button in order. If one opens Safari or Chrome, that's the winner —
+it records itself, so just come back here and keep going. If a button does
+nothing at all, that's a useful result too. Nothing here goes anywhere real.</p>
+${buttons}
+<script>
+(function () {
+  var host = location.host;
+  var list = document.querySelectorAll('.probe');
+  for (var i = 0; i < list.length; i++) {
+    list[i].addEventListener('click', function (e) {
+      var url = this.getAttribute('data-tpl').split('HOST').join(host);
+      try { navigator.sendBeacon('/escape-hit?s=' + encodeURIComponent(this.getAttribute('data-s')) + '&tap=1'); } catch (err) {}
+      this.className = 'probe done';
+      location.href = url;
+      e.preventDefault();
+    });
+  }
+})();
+</script>
+</body></html>`;
+}
 
 /**
  * Safe bounce shown when a crawler/scraper hits /go/<id>. No real destination.

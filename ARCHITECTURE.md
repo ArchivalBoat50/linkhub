@@ -180,38 +180,71 @@ Anything that builds an absolute URL for a client to act on must **pin
 
 ~All traffic arrives inside Instagram's in-app WebView, and a webview session
 starts logged-out every time — no saved login for the destination, no password autofill,
-no Apple Pay. So when a classified-human tap arrives from an in-app browser,
-`/go/<id>` hands it to the device's real browser instead of redirecting inside
-the webview.
+no Apple/Google Pay. So a classified-human tap is handed to the device's real
+browser instead of redirecting inside the webview.
 
 **This does not weaken invariant #1.** The escape URL points at our own
-`/go/<id>?b=1`, *never* at the destination. The real browser re-requests that
-URL and takes the ordinary 302 from there, so the real destination still
-appears in exactly one place — the `Location` header of a classified-human
-302 — and never inside an intent URI, a custom-scheme string, or an HTML body.
+`/go/<id>`, *never* at the destination. The real browser re-requests that URL
+and takes the ordinary 302 from there, so the real destination still appears
+in exactly one place — the `Location` header of a classified-human 302 — and
+never inside an intent URI, a custom-scheme string, or an HTML body.
 
-Two platforms, two mechanisms, because that is what each OS allows:
+#### What works, established by probe — not by reasoning
 
-- **Android** — a 302 to an `intent://` URI. No interstitial, no JS, no added
-  latency. Deliberately **no `package=`**, so the system resolves it with the
-  user's *default* browser instead of forcing Chrome. Because the intent
-  targets our own domain, no app holds an app-link claim on it, so there's no
-  chooser dialog and no bounce back into Instagram. `S.browser_fallback_url`
-  returns to the normal path if nothing can handle it.
-- **iOS** — `x-safari-https://`, which requires JS, hence a small interstitial
-  (`renderBrowserEscape()` in `render.ts`). **Apple exposes no "open in the
-  default browser" scheme** — an app can neither query the default nor invoke
-  it — so iOS necessarily lands in Safari. That is an OS limit, not a choice.
-  The interstitial self-heals: if the scheme is refused, a 1.2 s timer falls
-  through to the normal in-webview redirect, i.e. exactly the old behaviour.
-  If the escape fires, Safari comes forward, the page is backgrounded, and
-  `visibilitychange`/`pagehide` cancels the timer so the webview doesn't chase
-  the link too. **A refused escape must never cost the click.**
+Three iOS fixes failed in a row. Rather than guess a fourth scheme, a probe
+page (`/escape-test`) fired every candidate at a URL **on our own domain**, so
+a working scheme records its own success: the escaping browser arrives with its
+own User-Agent, and that arrival is the proof. On an iPhone 17 Pro Max / iOS 26:
 
-The `b=1` marker means "already escaped": it suppresses a second escape attempt
-(no loops) **and** suppresses re-logging, so one tap is still one `link_clicks`
-row. The click is logged on the first hop, which is also the hop that carries
-the inbound UTMs.
+| Scheme | Result |
+| --- | --- |
+| `googlechrome://`, `googlechromes://` | **works** — arrives with a `CriOS` UA |
+| `x-safari-https://` | refused, nothing arrives |
+| `com-apple-mobilesafari-tab://` | refused, nothing arrives |
+| plain `https://` (control) | stays inside Instagram, as expected |
+
+**Safari cannot be targeted at all** — Apple registers no public URL scheme for
+it, and `x-safari-https://` is dead on iOS 26 (tried on page load, from a click
+handler, and as a native anchor activation — all refused). A visitor whose only
+browser is Safari necessarily stays in the webview. Do not re-try those two.
+
+#### As built
+
+- **Android** — a 302 to an `intent://` URI. No JS, no added latency.
+  Deliberately **no `package=`**, so the system resolves it with the user's
+  *default* browser instead of forcing Chrome. Because the intent targets our
+  own domain, no app holds an app-link claim on it, so there's no chooser
+  dialog and no bounce back into Instagram; `S.browser_fallback_url` returns to
+  the normal path if nothing can handle it. **Untested on real hardware.**
+- **iOS, on load** — attempts `googlechromes://` for the current URL, moving the
+  whole page to Chrome so the *bio-link* tap escapes, not just the card. Needs
+  no timer or fallback: if refused, the visitor stays on the page already in
+  front of them. `sessionStorage`-guarded so returning to the Instagram tab
+  doesn't yank them out again.
+- **iOS, on card tap** — covers the case where the load-time attempt didn't
+  fire. The card's `href` is swapped to the scheme on `pointerdown`, so the
+  navigation is a **native anchor activation, not a scripted one**; the href
+  starts as `/go/<id>` so a no-JS visitor still gets a working link. A 1.2 s
+  timer falls through to the ordinary in-webview redirect, cancelled on
+  `visibilitychange`/`pagehide`. **A refused escape must never cost the click.**
+- The script is served **only** to iOS webview visitors — never on the bot page.
+  Chrome is not a webview, so it never receives it: no loop is possible.
+
+#### Request markers — get these wrong and analytics break silently
+
+The two platforms escape at *different points*, so "one tap, one row" needs care:
+
+| Marker | Meaning | Logs a click? |
+| --- | --- | --- |
+| `b=a` | Android; escaped server-side, webview hop already logged | **no** — would double-count |
+| `b=i` | iOS; escaped on the page, webview never reached the server | **yes** — the only record of the tap |
+| `e=to` | iOS; escape refused, fallback timer fired | **yes** — this request *is* the tap |
+| `x=1` | page re-opening in Chrome after the load-time escape | suppresses the duplicate `page_visit` |
+
+An earlier revision suppressed logging on *every* escape hop — correct for
+Android, wrong for iOS. Shipped with a working escape it would have dropped
+every escaped click from analytics, so the feature working would have looked
+exactly like traffic collapsing.
 
 ---
 

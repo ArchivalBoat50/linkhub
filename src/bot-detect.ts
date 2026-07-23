@@ -106,6 +106,14 @@ export function classifyRequest(request: Request, opts: ClassifyOpts = {}): Clas
   return { kind: "human", isIgWebview: false };
 }
 
+// True when the UA is an in-app browser (IG, FB, Messenger, TikTok, ...) rather
+// than a standalone browser. These are all real HUMANS — this is not a bot
+// signal. It exists so /go/<id> can break the tap out of the webview and into
+// the device's real browser (see browserEscape() in index.ts).
+export function isInAppWebview(ua: string): boolean {
+  return IG_WEBVIEW_PATTERN.test(ua) || OTHER_WEBVIEW_PATTERN.test(ua);
+}
+
 export function deviceFromUA(ua: string): "mobile" | "tablet" | "desktop" {
   if (/ipad|tablet/i.test(ua)) return "tablet";
   if (/mobile|iphone|android/i.test(ua)) return "mobile";

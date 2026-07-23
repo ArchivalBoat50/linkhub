@@ -1,4 +1,4 @@
-import { classifyRequest, deviceFromUA, browserFromUA, ClassifyOpts } from "./bot-detect";
+import { classifyRequest, deviceFromUA, browserFromUA, isInAppWebview, ClassifyOpts } from "./bot-detect";
 import { renderBotPage, renderHumanPage, renderBounce } from "./render";
 import { renderDashboardShell } from "./dashboard";
 import { renderAdminShell } from "./admin";
@@ -115,7 +115,10 @@ async function handleIndex(request: Request, env: Env, ctx: ExecutionContext, ur
     });
   }
 
-  return new Response(renderHumanPage(pageConfig, env.PAGE_ID), {
+  // iOS in-app webviews get the escape script; nobody else pays its bytes.
+  const iosEscape = isInAppWebview(c.ua) && /iphone|ipad|ipod/i.test(c.ua);
+
+  return new Response(renderHumanPage(pageConfig, env.PAGE_ID, iosEscape), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
@@ -148,20 +151,34 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
     });
   }
 
-  // Human: log the click server-side, then 302 to the real destination.
+  // Human. Log the tap server-side — but only on the FIRST hop. A webview
+  // escape re-enters this handler from the real browser carrying ESCAPED_PARAM,
+  // and that second request is the same tap, not a new one. One tap, one row.
   const c = extractCtx(request, url);
-  const visitorHash = await hashVisitor(c.ip, env.VISITOR_SALT || "dev-salt");
-  ctx.waitUntil(
-    logClick(env, {
-      pageId: env.PAGE_ID,
-      linkId: link.id,
-      country: c.country,
-      device: c.device,
-      referrer: c.referrer,
-      utm: c.utm,
-      visitorHash,
-    })
-  );
+  if (!url.searchParams.has(ESCAPED_PARAM)) {
+    const visitorHash = await hashVisitor(c.ip, env.VISITOR_SALT || "dev-salt");
+    ctx.waitUntil(
+      logClick(env, {
+        pageId: env.PAGE_ID,
+        linkId: link.id,
+        country: c.country,
+        device: c.device,
+        referrer: c.referrer,
+        utm: c.utm,
+        visitorHash,
+      })
+    );
+
+    // Android in-app webview: hand the tap to the device's default browser
+    // instead of 302-ing inside Instagram's WebView. See androidEscape().
+    const intent = androidEscape(c.ua, url);
+    if (intent) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: intent, "cache-control": "no-store", "referrer-policy": "no-referrer" },
+      });
+    }
+  }
 
   return new Response(null, {
     status: 302,
@@ -171,6 +188,46 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
       "referrer-policy": "no-referrer",
     },
   });
+}
+
+// Marks the second hop of a webview escape: the request the real browser makes
+// after we hand the link off to it. Its presence means "already escaped, don't
+// try again and don't re-log the click".
+const ESCAPED_PARAM = "b";
+
+// Breaks an ANDROID in-app-browser tap (Instagram's WebView and friends) out
+// into the device's default browser, via a plain 302 to an `intent://` URI —
+// no interstitial, no JS, no added latency. Worth doing: the destination's
+// saved login, password autofill, and Google/Apple Pay all live in the real
+// browser, while a webview session starts logged-out every time.
+//
+// Deliberately NO `package=`, so the system resolves the intent with the
+// user's DEFAULT browser rather than forcing Chrome. Because the intent
+// targets our own domain, no app holds an app-link claim on it, so there's no
+// chooser dialog and no bounce back into Instagram. If nothing can handle it,
+// `S.browser_fallback_url` puts us back on the normal path.
+//
+// CLOAKING (invariant #1): the intent URI points at OUR OWN /go/<id>, never at
+// the destination. The real URL still appears in exactly one place — the
+// `Location` header of a classified-human 302. The default browser simply
+// re-requests /go/<id>?b=1 and takes that ordinary 302 from there.
+//
+// iOS is handled on the PAGE instead (IOS_ESCAPE_SCRIPT in render.ts), not
+// here: iOS discards a custom-scheme navigation that has no user gesture
+// behind it, so the attempt has to ride the visitor's own tap on the card.
+function androidEscape(ua: string, url: URL): string | null {
+  if (!isInAppWebview(ua)) return null;
+  if (!/android/i.test(ua)) return null;
+
+  // Same /go/<id>, same query (UTMs preserved), plus the already-escaped mark.
+  const next = new URL(url.toString());
+  next.searchParams.set(ESCAPED_PARAM, "1");
+
+  const target = `${next.host}${next.pathname}${next.search}`;
+  return (
+    `intent://${target}#Intent;scheme=https;action=android.intent.action.VIEW;` +
+    `S.browser_fallback_url=${encodeURIComponent(next.toString())};end`
+  );
 }
 
 // Resolves a link's favicon from its real destination domain, SERVER-SIDE,

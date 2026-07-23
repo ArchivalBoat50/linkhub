@@ -263,7 +263,7 @@ export function renderBotPage(cfg: PageConfig, canonicalUrl: string): string {
  * Both are re-classified server-side. Profile photo + background image are
  * shown here (human only). See ARCHITECTURE.md §2.
  */
-export function renderHumanPage(cfg: PageConfig, pageId: string): string {
+export function renderHumanPage(cfg: PageConfig, pageId: string, iosEscape = false): string {
   const linksHtml = cfg.links
     .map(
       (l) => `
@@ -293,9 +293,76 @@ export function renderHumanPage(cfg: PageConfig, pageId: string): string {
     <div class="links" id="links">${linksHtml}</div>
     <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.modelName)}</p>
   </div>
+  ${iosEscape ? IOS_ESCAPE_SCRIPT : ""}
 </body>
 </html>`;
 }
+
+// iOS in-app-browser escape. Emitted ONLY for an iOS webview visitor, so every
+// other page stays byte-identical (page weight is a conversion metric here —
+// see ARCHITECTURE.md, perf pass).
+//
+// WHY IT LIVES ON THE CARD TAP rather than on an interstitial at /go/<id>:
+// iOS silently discards a navigation to a custom scheme with no user gesture
+// behind it. An interstitial firing x-safari- on page load is exactly that
+// case, and it WAS dropped on iOS 26 — tested on a real handset 2026-07-23,
+// the link just opened inside Instagram as before. Running the same attempt
+// inside the card's click handler reuses the tap the visitor already made: no
+// extra tap, and a genuine gesture behind the scheme.
+//
+// CLOAKING: the only URL this builds is our own origin + the card's existing
+// /go/<id> href. No destination here, and this never reaches the bot page.
+//
+// FALLBACK (load-bearing): if iOS refuses the scheme nothing observable
+// happens, so a timer falls through to the ordinary /go/<id> navigation —
+// the pre-escape behaviour, inside the webview. If the escape DOES fire,
+// Safari comes forward, this page is backgrounded, and visibilitychange /
+// pagehide cancels the timer so the webview doesn't chase the link too.
+// A refused escape must never cost the click.
+// NOTE ON MECHANISM (2026-07-23, two failed rounds on a real iPhone / iOS 26):
+// assigning `location.href = 'x-safari-...'` is refused by Instagram's iOS
+// webview — both on page load (no gesture) AND from inside a click handler
+// (real gesture). So the blocker is not the gesture, it's the scripted
+// navigation itself. This version therefore never scripts the navigation: it
+// rewrites the card's own href on pointerdown, and the tap that follows is an
+// ordinary native anchor navigation to the scheme — the strongest signal iOS
+// will accept. The href starts as /go/<id> and is only swapped once a tap has
+// begun, so a no-JS visitor still gets a working link.
+const IOS_ESCAPE_SCRIPT = `<script>
+(function () {
+  var links = document.getElementById('links');
+  if (!links) return;
+  var timer = null;
+  function cancel() { if (timer) { clearTimeout(timer); timer = null; } }
+  document.addEventListener('visibilitychange', function () { if (document.hidden) cancel(); });
+  window.addEventListener('pagehide', cancel);
+
+  function card(e) {
+    return e.target && e.target.closest ? e.target.closest('a.link-card') : null;
+  }
+
+  // Swap in the escape scheme just before the tap completes, so the navigation
+  // the webview sees is a plain anchor activation, not a scripted one.
+  links.addEventListener('pointerdown', function (e) {
+    var a = card(e);
+    if (!a) return;
+    var path = a.getAttribute('data-go');
+    if (!path) { path = a.getAttribute('href'); a.setAttribute('data-go', path); }
+    a.setAttribute('href', 'x-safari-' + location.origin + path + (path.indexOf('?') > -1 ? '&' : '?') + 'b=1');
+  });
+
+  // Safety net: if iOS silently drops the scheme, nothing happens at all, so
+  // put the real href back and take the ordinary in-webview redirect.
+  links.addEventListener('click', function (e) {
+    var a = card(e);
+    if (!a) return;
+    var path = a.getAttribute('data-go');
+    if (!path) return;
+    cancel();
+    timer = setTimeout(function () { a.setAttribute('href', path); location.href = path; }, 1200);
+  });
+})();
+</script>`;
 
 /**
  * Safe bounce shown when a crawler/scraper hits /go/<id>. No real destination.

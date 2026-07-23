@@ -157,6 +157,43 @@ Routes (all in `src/index.ts`):
 | `/favicon.ico` | 204, to keep crawler favicon hits out of logs. |
 | everything else | 404. |
 
+### Breaking out of the in-app browser (`browserEscape()` in `index.ts`)
+
+~All traffic arrives inside Instagram's in-app WebView, and a webview session
+starts logged-out every time — no saved login for the destination, no password autofill,
+no Apple Pay. So when a classified-human tap arrives from an in-app browser,
+`/go/<id>` hands it to the device's real browser instead of redirecting inside
+the webview.
+
+**This does not weaken invariant #1.** The escape URL points at our own
+`/go/<id>?b=1`, *never* at the destination. The real browser re-requests that
+URL and takes the ordinary 302 from there, so the real destination still
+appears in exactly one place — the `Location` header of a classified-human
+302 — and never inside an intent URI, a custom-scheme string, or an HTML body.
+
+Two platforms, two mechanisms, because that is what each OS allows:
+
+- **Android** — a 302 to an `intent://` URI. No interstitial, no JS, no added
+  latency. Deliberately **no `package=`**, so the system resolves it with the
+  user's *default* browser instead of forcing Chrome. Because the intent
+  targets our own domain, no app holds an app-link claim on it, so there's no
+  chooser dialog and no bounce back into Instagram. `S.browser_fallback_url`
+  returns to the normal path if nothing can handle it.
+- **iOS** — `x-safari-https://`, which requires JS, hence a small interstitial
+  (`renderBrowserEscape()` in `render.ts`). **Apple exposes no "open in the
+  default browser" scheme** — an app can neither query the default nor invoke
+  it — so iOS necessarily lands in Safari. That is an OS limit, not a choice.
+  The interstitial self-heals: if the scheme is refused, a 1.2 s timer falls
+  through to the normal in-webview redirect, i.e. exactly the old behaviour.
+  If the escape fires, Safari comes forward, the page is backgrounded, and
+  `visibilitychange`/`pagehide` cancels the timer so the webview doesn't chase
+  the link too. **A refused escape must never cost the click.**
+
+The `b=1` marker means "already escaped": it suppresses a second escape attempt
+(no loops) **and** suppresses re-logging, so one tap is still one `link_clicks`
+row. The click is logged on the first hop, which is also the hop that carries
+the inbound UTMs.
+
 ---
 
 ## 4. File-by-file
@@ -348,6 +385,13 @@ and `/go/*` from any custom edge caching.
   - Human `/` renders `/go/*` links; bot `/` renders zero `/go/*` links.
   - Human `/go/vip` → 302 with real `Location`; bot `/go/vip` → bounce with
     no real `Location`.
+  - In-app-browser escape: IG-Android UA → 302 to `intent://` (no `package=`,
+    fallback URL present); IG-iOS UA → interstitial whose body contains **zero**
+    occurrences of the destination; real-Safari UA → plain 302, unchanged;
+    either UA **with** `?b=1` → plain 302, so no loop; crawler → bounce with no
+    `Location`, no `intent://`, no `x-safari-`. **Not yet verified on a real
+    handset** — whether iOS honours the scheme without a user gesture can only
+    be settled on a physical phone inside the Instagram app.
   - `robots.txt` serves and disallows AI crawlers.
   - `/api/analytics` → 401 without token, real JSON with token.
   - Visits and clicks actually persisted to D1 and surfaced in the summary

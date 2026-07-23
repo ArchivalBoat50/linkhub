@@ -157,7 +157,26 @@ Routes (all in `src/index.ts`):
 | `/favicon.ico` | 204, to keep crawler favicon hits out of logs. |
 | everything else | 404. |
 
-### Breaking out of the in-app browser (`browserEscape()` in `index.ts`)
+### HTTPS is forced in the Worker (do not remove)
+
+`http://` is 301'd to `https://` ahead of all routing (localhost exempt, so
+`wrangler dev` still works). This is **not** hygiene — until 2026-07-23 real
+traffic was arriving in cleartext, because Instagram stores bio links without a
+scheme and opens them over `http://`, and the zone had no HTTPS redirect. It
+was found in the logs, not by inspection: the `Referer` on every recorded
+mobile tap read `http://example-links.com/`.
+
+The reason it matters is threat-model-level, not cosmetic: **the 302 carrying
+the real destination was travelling unencrypted**, which hands the account →
+destination association to any observer on the network path — exactly the link
+this design exists to conceal. It also made `og:url` advertise `http://` to
+Meta's crawler, and left `location.origin` as `http:`, so the iOS escape built
+an `x-safari-http://` URL.
+
+Anything that builds an absolute URL for a client to act on must **pin
+`https://` explicitly** rather than trusting how the request arrived.
+
+### Breaking out of the in-app browser (`androidEscape()` + `IOS_ESCAPE_SCRIPT`)
 
 ~All traffic arrives inside Instagram's in-app WebView, and a webview session
 starts logged-out every time — no saved login for the destination, no password autofill,

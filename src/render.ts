@@ -328,6 +328,11 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, iosEscape = fal
 // ordinary native anchor navigation to the scheme — the strongest signal iOS
 // will accept. The href starts as /go/<id> and is only swapped once a tap has
 // begun, so a no-JS visitor still gets a working link.
+//
+// The scheme is hard-coded to https rather than read from location.origin:
+// Instagram opens bio links over http:// (the Worker now 301s those, but this
+// keeps the escape correct even if that ever changes). Comments stay OUT of
+// the emitted string below — those bytes ship to every iOS visitor.
 const IOS_ESCAPE_SCRIPT = `<script>
 (function () {
   var links = document.getElementById('links');
@@ -348,7 +353,7 @@ const IOS_ESCAPE_SCRIPT = `<script>
     if (!a) return;
     var path = a.getAttribute('data-go');
     if (!path) { path = a.getAttribute('href'); a.setAttribute('data-go', path); }
-    a.setAttribute('href', 'x-safari-' + location.origin + path + (path.indexOf('?') > -1 ? '&' : '?') + 'b=1');
+    a.setAttribute('href', 'x-safari-https://' + location.host + path + (path.indexOf('?') > -1 ? '&' : '?') + 'b=1');
   });
 
   // Safety net: if iOS silently drops the scheme, nothing happens at all, so

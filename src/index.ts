@@ -8,16 +8,34 @@ import { Env, hashVisitor, parseUTM, logVisit, logClick, getAnalyticsSummary } f
 // A request is "local dev" when it's coming through `wrangler dev`, where
 // request.cf.asn is usually absent. We relax the Meta-ASN check there so
 // testing the crawler path with a spoofed UA still reads as verified.
+function isLocalHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+}
+
 function classifyOpts(request: Request): ClassifyOpts {
-  const host = new URL(request.url).hostname;
-  const isLocal = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-  return { trustMetaUAWithoutASN: isLocal };
+  return { trustMetaUAWithoutASN: isLocalHost(new URL(request.url).hostname) };
 }
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    // Force HTTPS before anything else. Instagram stores bio links without a
+    // scheme and opens them over http://, and the zone had no HTTPS redirect —
+    // so REAL traffic was arriving in cleartext (confirmed from the Referer on
+    // every logged mobile tap, 2026-07-23). Three separate consequences:
+    //   1. the 302 carrying the real destination travelled unencrypted, which
+    //      hands the account -> destination association to any network observer
+    //      — the exact link this whole design exists to conceal;
+    //   2. og:url advertised http:// to Meta's crawler;
+    //   3. location.origin was http:, so the iOS escape built an
+    //      x-safari-http:// URL instead of x-safari-https://.
+    // Cheap to fix here and it applies to every route at once.
+    if (url.protocol === "http:" && !isLocalHost(url.hostname)) {
+      url.protocol = "https:";
+      return Response.redirect(url.toString(), 301);
+    }
 
     if (path === "/" || path === "") {
       return handleIndex(request, env, ctx, url);
@@ -222,6 +240,9 @@ function androidEscape(ua: string, url: URL): string | null {
   // Same /go/<id>, same query (UTMs preserved), plus the already-escaped mark.
   const next = new URL(url.toString());
   next.searchParams.set(ESCAPED_PARAM, "1");
+  // scheme=https below is a promise about this URL — make it true rather than
+  // trusting how the request arrived (Instagram opens bio links over http).
+  if (!isLocalHost(next.hostname)) next.protocol = "https:";
 
   const target = `${next.host}${next.pathname}${next.search}`;
   return (

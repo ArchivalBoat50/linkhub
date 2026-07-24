@@ -170,13 +170,19 @@ The reason it matters is threat-model-level, not cosmetic: **the 302 carrying
 the real destination was travelling unencrypted**, which hands the account →
 destination association to any observer on the network path — exactly the link
 this design exists to conceal. It also made `og:url` advertise `http://` to
-Meta's crawler, and left `location.origin` as `http:`, so the iOS escape built
-an `x-safari-http://` URL.
+Meta's crawler, and left `location.origin` as `http:`, so the early iOS escape
+attempts were building `x-safari-http://` URLs — one reason the first three
+failed, though that whole browser-scheme approach was itself the wrong tool
+(the working mechanism is `instagram://extbrowser`, see §3.5 below).
 
 Anything that builds an absolute URL for a client to act on must **pin
 `https://` explicitly** rather than trusting how the request arrived.
 
 ### Breaking out of the in-app browser (`androidEscape()` + `IOS_ESCAPE_SCRIPT`)
+
+> **TL;DR — iOS uses `instagram://extbrowser`, Instagram's own "open in the
+> default browser" deeplink; Android uses `intent://`. Not a browser scheme.
+> See "The mechanism" and the investigation log below.**
 
 ~All traffic arrives inside Instagram's in-app WebView, and a webview session
 starts logged-out every time — no saved login for the destination, no password autofill,
@@ -189,47 +195,56 @@ and takes the ordinary 302 from there, so the real destination still appears
 in exactly one place — the `Location` header of a classified-human 302 — and
 never inside an intent URI, a custom-scheme string, or an HTML body.
 
-#### What works, established by probe — not by reasoning
+#### The mechanism (`instagram://extbrowser`)
 
-Three iOS fixes failed in a row. Rather than guess a fourth scheme, a probe
-page fired every candidate at a URL **on our own domain**, so a working scheme
-records its own success: the escaping browser arrives with its own User-Agent,
-and that arrival is the proof. The probe and its `debug_events` table have
-since been removed. On an iPhone 17 Pro Max / iOS 26:
+The iOS escape is **Instagram's own private deeplink**, not a browser scheme:
 
-| Scheme | Result |
-| --- | --- |
-| `googlechrome://`, `googlechromes://` | **works** — arrives with a `CriOS` UA |
-| `x-safari-https://` | refused, nothing arrives |
-| `com-apple-mobilesafari-tab://` | refused, nothing arrives |
-| plain `https://` (control) | stays inside Instagram, as expected |
+```
+instagram://extbrowser/?url=<the https URL, percent-encoded>
+```
 
-**Safari cannot be targeted at all** — Apple registers no public URL scheme for
-it, and `x-safari-https://` is dead on iOS 26 (tried on page load, from a click
-handler, and as a native anchor activation — all refused). A visitor whose only
-browser is Safari necessarily stays in the webview. Do not re-try those two.
+`instagram://` is answered by the Instagram app that is *hosting the webview*,
+and `extbrowser` is its internal command "open this URL in the device's DEFAULT
+browser" (Safari for most people). Because it targets the app's own scheme
+rather than a browser's, **iOS does not gesture-gate it** — it fires on page
+load with no tap, and needs no particular browser installed. That is the whole
+reason it succeeds where browser schemes fail.
+
+Confirmed on iPhone 17 Pro Max / iOS 26: lands in Safari. It is also exactly
+what a live competitor in this niche serves (see the investigation log below).
+
+> **Do not "simplify" this to a browser scheme.** `x-safari-https://`,
+> `com-apple-mobilesafari-tab://`, and `googlechrome://` were all tried and are
+> the wrong tool — see below. The path to the browser runs *through Instagram*,
+> not around it.
 
 #### As built
 
-- **Android** — a 302 to an `intent://` URI. No JS, no added latency.
-  Deliberately **no `package=`**, so the system resolves it with the user's
-  *default* browser instead of forcing Chrome. Because the intent targets our
-  own domain, no app holds an app-link claim on it, so there's no chooser
-  dialog and no bounce back into Instagram; `S.browser_fallback_url` returns to
-  the normal path if nothing can handle it. **Untested on real hardware.**
-- **iOS, on load** — attempts `googlechromes://` for the current URL, moving the
-  whole page to Chrome so the *bio-link* tap escapes, not just the card. Needs
-  no timer or fallback: if refused, the visitor stays on the page already in
-  front of them. `sessionStorage`-guarded so returning to the Instagram tab
-  doesn't yank them out again.
-- **iOS, on card tap** — covers the case where the load-time attempt didn't
-  fire. The card's `href` is swapped to the scheme on `pointerdown`, so the
-  navigation is a **native anchor activation, not a scripted one**; the href
-  starts as `/go/<id>` so a no-JS visitor still gets a working link. A 1.2 s
-  timer falls through to the ordinary in-webview redirect, cancelled on
-  `visibilitychange`/`pagehide`. **A refused escape must never cost the click.**
-- The script is served **only** to iOS webview visitors — never on the bot page.
-  Chrome is not a webview, so it never receives it: no loop is possible.
+- **Android** — a 302 to an `intent://` URI (server-side, in `androidEscape()`).
+  No JS, no added latency. Deliberately **no `package=`**, so the system
+  resolves it with the user's *default* browser instead of forcing Chrome.
+  Because the intent targets our own domain, no app holds an app-link claim on
+  it, so there's no chooser dialog and no bounce back into Instagram;
+  `S.browser_fallback_url` returns to the normal path if nothing can handle it.
+  **Untested on real hardware.** (Note: the competitor forces Chrome here via
+  `package=com.android.chrome`; we chose the default browser instead, matching
+  the stated goal — revisit if default-browser resolution proves flaky.)
+- **iOS, on load** — fires `instagram://extbrowser` for the current URL, moving
+  the *whole page* to the default browser so even the bio-link tap escapes, not
+  just a card tap. No fallback needed: if it somehow doesn't fire, the visitor
+  stays on the page already in front of them. `sessionStorage`-guarded so
+  returning to the Instagram tab doesn't relaunch it; the reopened URL carries
+  `x=1` so `handleIndex` doesn't double-count the visit.
+- **iOS, on card tap** — a safety net for the rare case the load-time escape
+  didn't run (e.g. `sessionStorage` blocked). Fires `instagram://extbrowser`
+  for the specific `/go/<id>` (carrying `b=i`); a 1.5 s timer falls through to
+  the ordinary in-webview `/go` redirect (`e=to`) if nothing happens, cancelled
+  on `visibilitychange`/`pagehide` so a successful escape doesn't also fire it.
+  **A refused escape must never cost the click.**
+- The script is served **only** to iOS **Instagram** webview visitors — gated on
+  the IG webview specifically, because only the Instagram app answers this
+  deeplink. Never on the bot page; the real browser is not an IG webview, so it
+  never receives it: no loop is possible.
 
 #### Request markers — get these wrong and analytics break silently
 
@@ -240,12 +255,56 @@ The two platforms escape at *different points*, so "one tap, one row" needs care
 | `b=a` | Android; escaped server-side, webview hop already logged | **no** — would double-count |
 | `b=i` | iOS; escaped on the page, webview never reached the server | **yes** — the only record of the tap |
 | `e=to` | iOS; escape refused, fallback timer fired | **yes** — this request *is* the tap |
-| `x=1` | page re-opening in Chrome after the load-time escape | suppresses the duplicate `page_visit` |
+| `x=1` | page re-opening in the default browser after the load-time escape | suppresses the duplicate `page_visit` |
 
 An earlier revision suppressed logging on *every* escape hop — correct for
 Android, wrong for iOS. Shipped with a working escape it would have dropped
 every escaped click from analytics, so the feature working would have looked
 exactly like traffic collapsing.
+
+#### Investigation log — how this was actually found (2026-07-23 → 24)
+
+Kept deliberately, because the *wrong turns* are the most useful part: the
+failure mode here was **reasoning about schemes instead of reading a working
+example**, and it cost four test cycles on a real handset before the answer
+turned out to be one HTTP fetch away.
+
+1. **First three iOS attempts, all `x-safari-https://`, all failed.** Tried on
+   page load (no gesture), then from a click handler (real gesture), then as a
+   native anchor-href swap. Every one opened inside Instagram anyway. Wrong
+   conclusion drawn at the time: "iOS gesture-gates the scheme."
+2. **A cleartext bug was masking the signal.** The page was being served over
+   plain `http://` (Instagram opens bio links without a scheme; the zone had no
+   HTTPS redirect), so `location.origin` was `http:` and the escapes were
+   building `x-safari-**http**://`. Fixed by forcing HTTPS (§ above) — a real
+   threat-model hole in its own right — but the escape *still* failed once the
+   URL was clean, which finally ruled the scheme itself out.
+3. **Stopped guessing, built a probe.** A page (`/escape-test`) fired every
+   candidate scheme at a URL on our own domain and let a working one *record its
+   own success* — the escaping browser arrives with its own User-Agent, and that
+   arrival is proof. Result on the owner's phone: `googlechrome://` /
+   `googlechromes://` **worked** (arrived as `CriOS`); `x-safari-https://` and
+   `com-apple-mobilesafari-tab://` got nothing. Shipped Chrome as the escape and
+   wrote down "Safari cannot be targeted." **That conclusion was wrong** — the
+   probe could only test schemes already thought of, and the right one wasn't
+   among them.
+4. **The owner insisted the reference profile had opened *Safari*, not Chrome,**
+   and later recalled the link: `clickylo.co`. That was the unlock.
+5. **Read the competitor instead of reasoning.** `clickylo.co` was a funnel
+   front; `/claim` redirected to **`slt.bio`** (a mature service in exactly this
+   niche — "Deeplink Auto: tap from Instagram, land in Safari"). Its bundles
+   referenced a deeplink domain, **`igpopl.ink`**. Fetching `igpopl.ink/<slug>`
+   **with an iPhone + Instagram User-Agent** returned a 347-byte page whose
+   entire body was the escape: `instagram://extbrowser/?url=…` for iOS, an
+   `intent://` variant for Android. The answer was sitting in the response.
+6. **Swapped our scheme to `instagram://extbrowser`.** Owner confirmed it lands
+   in Safari. One-line change in effect; four cycles of guessing avoided if the
+   competitor's page had been read on day one.
+
+**Lesson worth keeping:** when a behaviour is demonstrably possible in the wild,
+fetch the working example with the right User-Agent and read it, before
+theorising about what *should* work. A live competitor's client-side code is
+public and often contains the whole answer verbatim.
 
 ---
 

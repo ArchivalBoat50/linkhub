@@ -263,7 +263,7 @@ export function renderBotPage(cfg: PageConfig, canonicalUrl: string): string {
  * Both are re-classified server-side. Profile photo + background image are
  * shown here (human only). See ARCHITECTURE.md §2.
  */
-export function renderHumanPage(cfg: PageConfig, pageId: string, iosEscape = false): string {
+export function renderHumanPage(cfg: PageConfig, pageId: string, igEscape = false): string {
   const linksHtml = cfg.links
     .map(
       (l) => `
@@ -293,108 +293,78 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, iosEscape = fal
     <div class="links" id="links">${linksHtml}</div>
     <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.modelName)}</p>
   </div>
-  ${iosEscape ? IOS_ESCAPE_SCRIPT : ""}
+  ${igEscape ? IOS_ESCAPE_SCRIPT : ""}
 </body>
 </html>`;
 }
 
-// iOS in-app-browser escape. Emitted ONLY for an iOS webview visitor, so every
-// other page stays byte-identical (page weight is a conversion metric here —
-// see ARCHITECTURE.md, perf pass).
+// Instagram in-app-browser escape. Emitted ONLY for an Instagram webview
+// visitor, so every other page stays byte-identical (page weight is a
+// conversion metric here — see ARCHITECTURE.md, perf pass).
 //
-// WHY IT LIVES ON THE CARD TAP rather than on an interstitial at /go/<id>:
-// iOS silently discards a navigation to a custom scheme with no user gesture
-// behind it. An interstitial firing x-safari- on page load is exactly that
-// case, and it WAS dropped on iOS 26 — tested on a real handset 2026-07-23,
-// the link just opened inside Instagram as before. Running the same attempt
-// inside the card's click handler reuses the tap the visitor already made: no
-// extra tap, and a genuine gesture behind the scheme.
+// MECHANISM: `instagram://extbrowser/?url=<https url>`. This is Instagram's own
+// private deeplink — an instruction to the Instagram app, which is what is
+// hosting this webview, to open the given URL in the device's DEFAULT browser
+// (Safari for most people). Because it targets the app's own scheme rather than
+// a browser's, iOS does NOT gesture-gate it: it fires on page load with no tap.
+// That is the whole reason it works where x-safari-/googlechrome- failed —
+// those are browser schemes iOS refuses to launch without a user gesture, and
+// x-safari- is dead on iOS 26 regardless (all three were tested on a real
+// handset 2026-07-23). Confirmed in the wild: this is exactly what a competitor
+// (slt.bio / poplink) serves to iOS Instagram webviews, and it lands in Safari.
 //
-// CLOAKING: the only URL this builds is our own origin + the card's existing
-// /go/<id> href. No destination here, and this never reaches the bot page.
+// Android is handled server-side (androidEscape() → intent://), so this file
+// only deals with the iOS/Instagram case.
 //
-// FALLBACK (load-bearing): if iOS refuses the scheme nothing observable
-// happens, so a timer falls through to the ordinary /go/<id> navigation —
-// the pre-escape behaviour, inside the webview. If the escape DOES fire,
-// Safari comes forward, this page is backgrounded, and visibilitychange /
-// pagehide cancels the timer so the webview doesn't chase the link too.
-// A refused escape must never cost the click.
-// MECHANISM, established by probing a real iPhone 17 Pro Max on iOS 26
-// (2026-07-23) rather than by reasoning — every assumption below was tested:
+// CLOAKING: the only URLs built here are our own origin + our own path. No
+// destination string anywhere, and this never reaches the bot page.
 //
-// - `x-safari-https://` and `com-apple-mobilesafari-tab://` are REFUSED. Not
-//   gesture-blocked — dead. They were tried on page load, from a click handler,
-//   and as a native anchor activation. Nothing arrived. Do not retry these.
-// - `googlechrome://` and `googlechromes://` WORK: the request arrives at the
-//   server with a CriOS User-Agent, proving a real escape out of the webview.
+// TWO escapes, covering different taps:
 //
-// **Safari cannot be targeted at all.** Apple registers no public URL scheme
-// for it, so a visitor whose only browser is Safari necessarily stays in the
-// webview. That is an OS limit, not a gap in this code. In practice the escape
-// only fires when Chrome is installed — which is also a decent proxy for "this
-// person actually uses Chrome", i.e. their logged-in session lives there.
+// 1. ON LOAD — moves the whole page to the default browser, so even the
+//    BIO-LINK tap escapes, not just a card tap. No fallback needed: if the
+//    deeplink somehow doesn't fire, the visitor just stays on the page already
+//    in front of them (the pre-escape behaviour). sessionStorage-guarded so
+//    returning to the Instagram tab doesn't relaunch it, and the reopened URL
+//    carries x=1 so handleIndex doesn't double-count the visit. No loop: the
+//    real browser is not an Instagram webview, so it is never served this.
+// 2. ON CARD TAP — a safety net for the rare case where (1) didn't run (e.g.
+//    sessionStorage blocked). Escapes the specific /go/<id> to the default
+//    browser; a short timer falls through to the ordinary in-webview redirect
+//    if the deeplink does nothing, cancelled on visibilitychange/pagehide so a
+//    successful escape doesn't also fire the fallback. A refused escape must
+//    never cost the click.
 //
-// The navigation is a native anchor activation (href swapped on pointerdown),
-// not a scripted one, and the scheme's host is hard-coded https rather than
-// read from location.origin, since Instagram opens bio links over http://.
 // Keep comments OUT of the emitted string below — those bytes ship to every
-// iOS visitor.
-//
-// TWO escapes live here, and they cover different taps:
-//
-// 1. ON LOAD — moves the whole page to Chrome, so the BIO-LINK tap escapes too,
-//    not just the card. This one needs no timer or fallback: if the scheme is
-//    refused the visitor simply stays on the page they are already looking at,
-//    which is the pre-existing behaviour. Guarded by sessionStorage so
-//    returning to the Instagram tab doesn't yank the visitor out again, and the
-//    Chrome-bound URL carries `x=1` so handleIndex doesn't double-count the
-//    visit. No loop is possible: Chrome isn't a webview, so it is never served
-//    this script.
-// 2. ON CARD TAP — the fallback for when (1) didn't fire (no Chrome, or the
-//    load-time attempt was refused for want of a gesture). Still needed.
+// Instagram visitor.
 const IOS_ESCAPE_SCRIPT = `<script>
 (function () {
+  var enc = encodeURIComponent;
+  function extbrowser(u) { location.href = 'instagram://extbrowser/?url=' + enc(u); }
+
   try {
     if (!sessionStorage.getItem('esc')) {
       sessionStorage.setItem('esc', '1');
-      location.href = 'googlechromes://' + location.host + location.pathname +
-        (location.search ? location.search + '&' : '?') + 'x=1';
+      extbrowser(location.origin + location.pathname +
+        (location.search ? location.search + '&' : '?') + 'x=1');
     }
   } catch (err) {}
 
   var links = document.getElementById('links');
   if (!links) return;
-  var timer = null;
-  function cancel() { if (timer) { clearTimeout(timer); timer = null; } }
-  document.addEventListener('visibilitychange', function () { if (document.hidden) cancel(); });
-  window.addEventListener('pagehide', cancel);
-
-  function card(e) {
-    return e.target && e.target.closest ? e.target.closest('a.link-card') : null;
-  }
-
-  // Swap in the escape scheme just before the tap completes, so the navigation
-  // the webview sees is a plain anchor activation, not a scripted one.
-  links.addEventListener('pointerdown', function (e) {
-    var a = card(e);
-    if (!a) return;
-    var path = a.getAttribute('data-go');
-    if (!path) { path = a.getAttribute('href'); a.setAttribute('data-go', path); }
-    a.setAttribute('href', 'googlechromes://' + location.host + path + (path.indexOf('?') > -1 ? '&' : '?') + 'b=i');
-  });
-
-  // Safety net: if iOS silently drops the scheme, nothing happens at all, so
-  // put the real href back and take the ordinary in-webview redirect.
   links.addEventListener('click', function (e) {
-    var a = card(e);
+    var a = e.target && e.target.closest ? e.target.closest('a.link-card') : null;
     if (!a) return;
-    var path = a.getAttribute('data-go');
+    var path = a.getAttribute('href');
     if (!path) return;
-    cancel();
-    timer = setTimeout(function () {
-      a.setAttribute('href', path);
+    e.preventDefault();
+    var timer = setTimeout(function () {
       location.href = path + (path.indexOf('?') > -1 ? '&' : '?') + 'e=to';
-    }, 1200);
+    }, 1500);
+    function cancel() { clearTimeout(timer); }
+    document.addEventListener('visibilitychange', function () { if (document.hidden) cancel(); });
+    window.addEventListener('pagehide', cancel);
+    extbrowser(location.origin + path + (path.indexOf('?') > -1 ? '&' : '?') + 'b=i');
   });
 })();
 </script>`;

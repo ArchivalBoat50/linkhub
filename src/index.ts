@@ -146,10 +146,13 @@ async function handleIndex(request: Request, env: Env, ctx: ExecutionContext, ur
     });
   }
 
-  // iOS in-app webviews get the escape script; nobody else pays its bytes.
-  const iosEscape = isInAppWebview(c.ua) && /iphone|ipad|ipod/i.test(c.ua);
+  // Only the iOS Instagram webview gets the escape script; nobody else pays its
+  // bytes. It relies on the `instagram://extbrowser` deeplink, which only the
+  // Instagram app answers — so it is gated on the IG webview specifically, not
+  // any in-app browser. Android IG escapes server-side in handleGo instead.
+  const igEscape = isIgWebview && /iphone|ipad|ipod/i.test(c.ua);
 
-  return new Response(renderHumanPage(pageConfig, env.PAGE_ID, iosEscape), {
+  return new Response(renderHumanPage(pageConfig, env.PAGE_ID, igEscape), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",

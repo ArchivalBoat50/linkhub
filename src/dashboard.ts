@@ -19,6 +19,12 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
   h1 { font-size: 18px; margin: 0 0 2px; }
   .sub { color: var(--dim); font-size: 12px; margin: 0 0 20px; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  /* The stat row is a grid, not the flex .row it used to be. With flex, a tile
+     that wrapped to a second line kept flex:1 and stretched to the full width —
+     at six tiles on a narrow viewport "Crawler hits" became a lone full-width
+     slab. auto-fit keeps every tile the same size however many rows they take. */
+  #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  #stats .stat { min-width: 0; }
   .stat { background: var(--card); border-radius: 10px; padding: 14px 16px; flex: 1; min-width: 120px; }
   .stat .n { font-size: 22px; font-weight: 700; }
   .stat .l { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
@@ -120,6 +126,11 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
     </div>
 
     <div class="panel">
+      <h2>Click-through rate by device <span class="hint">the blended rate hides this</span></h2>
+      <div id="ctrByDevice"></div>
+    </div>
+
+    <div class="panel">
       <h2>Clicks by link</h2>
       <div id="clicksByLink"></div>
     </div>
@@ -165,6 +176,24 @@ function bars(container, rows, keyField) {
 
 function stat(n, l) {
   return '<div class="stat"><div class="n">' + n + '</div><div class="l">' + l + '</div></div>';
+}
+
+// ---- CTR per device ----
+// Bar width tracks the RATE, not the visit count, so a small high-converting
+// segment isn't visually crushed by a large indifferent one. The raw counts
+// ride along on the right because a 100% rate off 2 visits means nothing.
+function ctrBars(container, rows) {
+  if (!rows || !rows.length) { container.innerHTML = '<p class="sub">No data yet</p>'; return; }
+  var max = Math.max.apply(null, rows.map(function (r) { return r.ctr; }));
+  container.innerHTML = rows.map(function (r) {
+    var label = esc(r.device || '(unknown)');
+    var pct = max > 0 ? Math.round((r.ctr / max) * 100) : 0;
+    return '<div class="bar-row" title="' + label + ': ' + r.clicks + ' clicks / ' + r.visits + ' visits">' +
+      '<div class="bar-label">' + label + '</div>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="bar-n">' + r.ctr + '% <span style="color:var(--dim);font-weight:400">' +
+      r.clicks + '/' + r.visits + '</span></div></div>';
+  }).join('');
 }
 
 function esc(s) {
@@ -409,12 +438,20 @@ function load() {
     document.getElementById('app').style.display = 'block';
     document.getElementById('windowLabel').textContent = 'Last ' + d.windowDays + ' days';
 
+    // The Instagram tap rate leads because it is the only tile that answers
+    // "is the page working" — it counts the people who actually came from the
+    // bio link. The all-traffic rate sits next to it, dimmed, because desktop
+    // crawl-through inflates its denominator and drags it toward meaningless.
     document.getElementById('stats').innerHTML =
       stat(d.humanVisits, 'Page visits') +
       stat(d.uniqueHumanVisitors, 'Unique visitors') +
       stat(d.totalClicks, 'Link clicks') +
-      stat(d.clickThroughRate + '%', 'Click-through rate') +
+      stat(d.igCtr + '% <span style="font-size:12px;color:var(--dim);font-weight:400">' +
+           d.igClicks + '/' + d.igVisits + '</span>', 'IG tap rate') +
+      stat(d.clickThroughRate + '%', 'CTR, all traffic') +
       stat(d.botVisits, 'Crawler hits');
+
+    ctrBars(document.getElementById('ctrByDevice'), d.ctrByDevice);
 
     var s = d.dailySeries || [];
     var labels = pluck(s, 'day');

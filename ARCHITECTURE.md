@@ -365,7 +365,9 @@ AI-design defaults. All user-controlled strings pass through `escapeHtml`.
   interpolation → no SQL injection).
 - `getAnalyticsSummary` — one `Promise.all` of aggregate queries: total /
   human / bot visits, unique humans, clicks per link, CTR, device / country /
-  referrer / bot-type splits, and a daily human-visit series.
+  referrer / bot-type splits, and a daily human-visit series. Also `igCtr` and
+  `ctrByDevice`, which are the metrics to actually judge the page on — see
+  §6.1 for why the blended `clickThroughRate` misleads.
 
 ### `src/dashboard.ts`
 Self-contained HTML+JS shell. Token entry gate → calls `/api/analytics` with
@@ -373,10 +375,17 @@ a bearer token → renders stat cards and horizontal bar breakdowns. No
 framework, no build step, no browser storage (token held in a JS variable
 for the session only).
 
+The stat row is a CSS **grid** (`repeat(auto-fit, minmax(140px, 1fr))`), not
+the flex `.row` used elsewhere. With flex, a tile that wrapped to a second
+line kept `flex: 1` and stretched to full width — at six tiles on a narrow
+viewport the last one became a lone full-width slab. `tsc` cannot see this
+class of bug; the dashboard needs a real browser before shipping (§9).
+
 ### `src/index.ts`
 The Worker. Routing, the human/bot decision, the `/go` redirect gate,
-`robots.txt`, analytics auth (timing-safe token compare), and per-request
-context extraction. Cache headers are set carefully — see §6.
+`robots.txt`, `/optout` (own-device exclusion, §6.3), analytics auth
+(timing-safe token compare), and per-request context extraction. Cache headers
+are set carefully — see §6.
 
 ### `schema.sql`
 Two tables, `page_visits` and `link_clicks`, both partitioned by `page_id`
@@ -445,6 +454,72 @@ and separate it from human numbers, rather than silently dropping it. Every
 human aggregate query filters `is_bot = 0`, so bots never inflate your real
 metrics.
 
+### 6.1 Reading the funnel honestly (metric definitions)
+
+**Do not judge the page on `clickThroughRate`.** It is `totalClicks ÷
+humanVisits` across *all* human traffic, and on 2026-07-25 that blend read
+6.6% while the audience it exists to measure was converting at ~32%. The gap
+was entirely denominator composition, in two layers:
+
+1. **Desktop traffic swamps it.** 612 of 936 human visits were desktop, 423 of
+   those no-referrer Chrome. On an Instagram bio link that mix is inverted
+   from what the traffic source implies, and it converted at 4.4% against
+   mobile's 10.7%. Whatever it is (scanners, previewers, scrapers that clear
+   `bot-detect.ts`), it is two thirds of the divisor and none of the audience.
+2. **Own-device test traffic.** Escape testing means hammering the live page
+   from a real phone, and those hits land in the same tables. One visitor
+   logged **59 visits in 13 minutes**; three test hashes accounted for 98
+   visits and 18 clicks, which pushed `igSharePct` to 10.8% when the true
+   figure was 2.2%.
+
+Prefer these, added 2026-07-25:
+
+- **`igCtr` / `igVisits` / `igClicks`** — clicks from visitors whose visit that
+  day came through the Instagram webview. The one number that answers "do
+  people who arrive from the bio link tap the card". Attribution is by
+  `visitor_hash`, which is stable *within* a UTC day (see the caveat below), so
+  a visitor who lands before midnight and taps after is missed. At current
+  volume that is rarer than the distortion it removes.
+- **`ctrByDevice`** — `[{device, visits, clicks, ctr}]`, a `LEFT JOIN` so a
+  segment with visits and zero clicks still appears (as 0%) instead of
+  vanishing from the list.
+
+`clickThroughRate` is retained for `dailySeries` and back-compat, and still
+renders on the dashboard, but is labelled "CTR, all traffic" and demoted.
+
+### 6.2 `visitor_hash` is IP + day — what that costs you
+
+`hashVisitor()` is `SHA-256(ip | YYYY-MM-DD | salt)`. Two consequences bite
+whenever you analyse this data, and both were hit on 2026-07-25:
+
+- **It rotates at midnight UTC.** So a persistent "ignore this visitor" list
+  keyed on `visitor_hash` cannot work — the key is gone within a day. This is
+  why own-device exclusion is a cookie (§6.3) and not a blocklist.
+- **It collapses every device behind one IP.** A laptop and a phone on the
+  same home Wi-Fi share a hash for that day. Grouping by `visitor_hash` and
+  selecting a non-aggregated `device`/`browser` returns an arbitrary row from
+  the group, which will misdescribe a mixed-device hash — read those columns
+  with `GROUP BY device, browser` or not at all.
+
+Both properties are deliberate privacy posture (§4 `analytics.ts`), not
+defects. They just make `visitor_hash` a weak identity, so treat per-visitor
+conclusions drawn from it as directional.
+
+### 6.3 Own-device exclusion (`/optout`)
+
+`GET /optout?t=<ADMIN_TOKEN>` sets `lh_optout=1` (two-year `Max-Age`, `Path=/`,
+`SameSite=Lax`, `Secure`, `HttpOnly`); `&off=1` clears it. Both `logVisit` and
+`logClick` skip when the cookie is present. A wrong or missing token returns
+the same 404 bounce a crawler gets, so the endpoint does not advertise itself.
+
+**Cookie jars are per-browser, and the iOS escape deliberately moves the
+visitor from the Instagram webview into Safari — two jars.** Opting out in
+Safari does *not* opt out the webview hop, and on iOS the webview hop is the
+one that logs (§3). A fully-excluded test device needs `/optout` run in both.
+
+This only suppresses *future* rows. Historical self-traffic has to be deleted
+by hand — see §9 for how the 2026-07-25 purge was done and backed up.
+
 ---
 
 ## 7. Cache correctness (subtle, important)
@@ -509,11 +584,40 @@ and `/go/*` from any custom edge caching.
   - Visits and clicks actually persisted to D1 and surfaced in the summary
     (verified counts: 1 human + 2 bot visits, 1 click, from the test run).
 
+- **Analytics metrics + `/optout` (2026-07-25), against `wrangler dev` and a
+  shaped local D1 seed** (desktop-heavy, a deliberately zero-click tablet
+  segment, a 21-visitor IG cohort):
+  - `ctrByDevice` arithmetic correct per segment, including the zero-click
+    tablet row rendering as `0% 0/9` rather than dropping out of the `LEFT
+    JOIN`.
+  - `/optout` gating: wrong token → 404 bounce with no `Set-Cookie`; correct
+    token → cookie with the expected attributes; `&off=1` → `Max-Age=0`.
+  - Suppression: a normal visit logs one `page_visits` + one `link_clicks`
+    row; the same requests carrying `lh_optout=1` log **neither**; the cookie
+    still matches mid-`Cookie`-string; a lookalike `xlh_optout=1` correctly
+    does **not** match (regex boundary).
+  - **Rendered in a real browser**, not just typechecked — which is what
+    caught the wrapped-stat-tile layout bug (§4 `dashboard.ts`). No console
+    errors.
+
+**Self-traffic purge (2026-07-25).** Three test `visitor_hash` values
+(`f80ea4f7…`, `95739d40…`, `346f59cd…`) held 98 `page_visits` and 18
+`link_clicks` rows from the Jul 23–24 escape-testing sessions. Deleted from
+production D1 after dumping all 116 rows to `analytics-purge-2026-07-25.bak`
+as replayable `INSERT`s (gitignored via `*.bak`; restore with `wrangler d1
+execute linkhub-db --remote --file=…`). Effect on the 30-day window:
+`igSharePct` 10.8% → 2.2%, `igCtr` 23.8% → 31.6%, blended CTR 6.6% → 5.2%.
+If you purge again, **look at the rows before deleting** — `visitor_hash`
+collapses devices behind one IP (§6.2), so a hash is not guaranteed to be one
+person's phone.
+
 **Not yet tested (requires your account / a real domain):**
 - Behavior against a *real* `facebookexternalhit` hit with a real Meta ASN.
 - Link-preview rendering in the Facebook Sharing Debugger.
 - Cloudflare edge cache behavior under a custom domain.
 - Real-world unique-visitor accuracy at volume.
+- `/optout` inside the actual Instagram webview on a physical handset (the
+  Safari jar is verified by construction; the webview jar is not).
 
 ---
 
@@ -594,6 +698,17 @@ Nothing here blocks it; the shape is already right.
 - No automated test suite is committed (tests were run ad hoc during the
   audit). Worth adding `vitest` + `@cloudflare/vitest-pool-workers` if this
   grows.
+- `visitor_hash` is a weak identity by design — IP + day, so it rotates nightly
+  and collapses every device behind one IP (§6.2). Unique-visitor counts and
+  any per-visitor attribution (including `igCtr`) inherit that fuzziness.
+- `/optout` is per-browser and therefore easy to under-apply: miss the
+  Instagram webview jar and iOS test traffic still logs (§6.3). There is no
+  server-side way to confirm a device is fully excluded — check by testing and
+  watching whether the row count moves.
+- The desktop share of "human" traffic (~72% as of 2026-07-25) is not
+  understood. It may be scrapers clearing `bot-detect.ts`, or it may be real.
+  Until it is characterised, every all-traffic aggregate on the dashboard is
+  measuring a population nobody has identified.
 
 ---
 
@@ -629,7 +744,34 @@ another way. These are the product.
 
 ### 14.1 Build order (owner's stated priority)
 
-**Phase 1 — Real analytics dashboard (do this first).**
+**Phase 0 — Traffic acquisition + measurement hygiene (open, added
+2026-07-25).** This jumped the queue because the 30-day numbers say the funnel
+is not the constraint. After removing self-traffic, the window held **19 real
+Instagram visits converting at 31.6%** out of 854 human visits — the page and
+the escape work; almost nobody arrives through the bio link. Concretely:
+
+1. **Owner action, blocking clean data:** run `/optout` on every test device,
+   in both Safari *and* the Instagram webview (§6.3, §14.3). Until this is
+   done, each escape-testing session re-poisons the tables the same way the
+   Jul 23–24 sessions did.
+2. **Characterise the desktop traffic** (~72% of "human" visits, converting at
+   4.4%, mostly no-referrer Chrome). If it is scrapers clearing
+   `bot-detect.ts`, tighten classification — it is currently diluting every
+   all-traffic aggregate. Start from `browser` + `referrer` + hour-of-day
+   distribution in `page_visits`; a scanner farm and an audience look nothing
+   alike hour to hour.
+3. **Then, and only then, optimise the page.** With ~19 IG visits per month,
+   no card/copy/layout change produces a readable signal — the sample cannot
+   distinguish a 30% tap rate from a 50% one. Volume first, conversion second.
+
+Do not re-derive "the button might be broken" from a low `clickThroughRate`;
+that reading has already been chased down once and the answer is §6.1.
+
+**Phase 1 — Real analytics dashboard.** *Largely shipped* — time-series
+charts, per-link/device/country/referrer/UTM drilldowns, bot-vs-human split,
+and the §6.1 metrics are all live. The notes below are the original scope,
+kept for the parts not yet done (chiefly: the dashboard is still a
+self-contained HTML+JS string, and grows every time a panel is added).
 Current `/dashboard` is a minimal token-gated view. Goals:
 - Time-series charts (visits, unique visitors, clicks, CTR over time), not
   just totals. The `dailySeries` query already exists in `analytics.ts` — the
@@ -702,18 +844,41 @@ but cannot perform these):
 - Enabling R2, creating buckets, enabling public access.
 - Registering/attaching custom domains and DNS.
 - Adding the WAF allow-rule for Meta ASN 32934 (§8) once on a custom domain.
-- Setting `wrangler secret` values.
+- Setting `wrangler secret` values. Note they are **write-only**: `wrangler
+  secret list` returns names, never values, and neither the Cloudflare
+  dashboard nor the API will read one back. A lost token is not recoverable,
+  only replaceable — `wrangler secret put <NAME>` overwrites in place and takes
+  effect in seconds with no redeploy. Keep `DASHBOARD_TOKEN` and `ADMIN_TOKEN`
+  in a password manager, under names that distinguish them: they gate different
+  surfaces (`/dashboard` + `/api/analytics` vs `/admin` + `/api/admin/*`) and
+  are not interchangeable. `DASHBOARD_TOKEN` was rotated 2026-07-25 for exactly
+  this reason.
+- **Running `/optout` on your own test devices** (§6.3). An agent cannot do
+  this — the cookie lives in the browser on your phone. Visit
+  `https://example-links.com/optout?t=<ADMIN_TOKEN>` once in Safari and once
+  inside the Instagram in-app browser, per device you test from.
 - Stripe account, products, and webhook secrets (Phase 4).
 
-### 14.4 Current live state (as of handoff)
+### 14.4 Current live state (as of 2026-07-25)
 
-- Deployed as Worker `linkhub` on `*.workers.dev` (single account,
-  `workers.dev` subdomain `xoascend`).
+- Deployed as Worker `linkhub` on the custom domain **`example-links.com`**
+  (`wrangler.toml` `routes`). `workers.dev` is **disabled** — a shared,
+  non-rotatable domain must never front a bio link (§1, §14.4 reasoning
+  preserved in `wrangler.toml`). The domain is disposable by design: when it
+  gets flagged, register a clean one and swap it, rather than trying to
+  rehabilitate it.
 - One page, one model (`Ana` / `@examplecreator`), one link → the destination platform, resolved
   server-side via `/go/vip`.
-- Profile photo hosted in R2 (public dev URL) and referenced via `avatarUrl`.
+- Profile photo hosted in R2 and referenced via `avatarUrl`.
 - D1 database `linkhub-db` live with the §6 schema; analytics logging
   confirmed working end-to-end.
-- Still on the `workers.dev` URL — a rotatable custom domain should front this
-  before it goes in any Instagram bio (§1 shared-domain reasoning; the
-  `workers.dev` domain is itself shared and non-rotatable).
+- In-app-browser escape shipped and settled on both platforms: iOS via
+  `instagram://extbrowser` (lands in Safari), Android via `intent://` (§3).
+- Analytics metrics reworked (§6.1) and `/optout` added (§6.3). Self-traffic
+  purged once, 2026-07-25 (§9).
+- **Open, blocking clean measurement:** `/optout` has *not* yet been run on the
+  owner's test devices (§14.1 Phase 0, §14.3). Until it is, escape testing
+  keeps writing self-traffic into the same tables the dashboard reads.
+- Honest read of the funnel at this date: ~19 real Instagram visits in 30 days
+  converting at 31.6%, against 854 human visits total. Conversion is fine;
+  arrivals are the constraint.

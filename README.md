@@ -35,6 +35,20 @@ lookup), browser, referrer, UTM params, human-vs-bot, and which crawler hit
 the safe page. Unique visitors use a salted **daily** hash of IP — never raw
 IP. View it at `/dashboard` (token-gated).
 
+**Judge the page on "IG tap rate" and the per-device CTR, not the headline
+"CTR, all traffic".** The blended rate divides by every human visit including
+desktop traffic that never came from the bio link, which drags it toward
+meaninglessness — it read 6.6% while the Instagram audience was converting at
+~32%. See ARCHITECTURE.md §6.1.
+
+**Exclude your own devices before you trust any of it.** Testing the in-app
+escape means loading the live page from a real phone, and those hits land in
+the same tables — one session once logged 59 visits in 13 minutes. Visit
+`/optout?t=<ADMIN_TOKEN>` on each test device, **once in the normal browser
+and once inside the Instagram in-app browser** (separate cookie jars, and on
+iOS the webview hop is the one that logs). `&off=1` reverses it. Details and
+the reason a cookie is used instead of an IP blocklist: ARCHITECTURE.md §6.3.
+
 ## Setup
 
 ```bash
@@ -46,8 +60,17 @@ npx wrangler d1 create linkhub-db
 
 npm run db:init:remote
 npx wrangler secret put DASHBOARD_TOKEN   # long random string
-npx wrangler secret put VISITOR_SALT      # a DIFFERENT long random string
+npx wrangler secret put ADMIN_TOKEN       # a DIFFERENT long random string
+npx wrangler secret put VISITOR_SALT      # a THIRD long random string
 ```
+
+**Save those tokens in a password manager as you set them.** Cloudflare
+secrets are write-only — `wrangler secret list` shows names only, and there is
+no way to read a value back from the CLI, the API, or the dashboard. A lost
+token can only be replaced (`wrangler secret put` overwrites in place, no
+redeploy needed), not recovered. `DASHBOARD_TOKEN` gates `/dashboard` +
+`/api/analytics`; `ADMIN_TOKEN` gates `/admin`, `/api/admin/*`, and `/optout`.
+They are not interchangeable, so label them distinctly.
 
 Edit `src/config.ts` (real name, bio, destination URLs) and `wrangler.toml`
 (`PAGE_ID`, `MODEL_NAME`). Then:

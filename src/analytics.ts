@@ -118,6 +118,8 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
     trafficSources,
     hourly,
     igWebviewVisits,
+    ctrByDevice,
+    igCohort,
   ] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ?`).bind(pageId, since).first<{ n: number }>(),
     env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0`).bind(pageId, since).first<{ n: number }>(),
@@ -172,6 +174,31 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
     ).bind(pageId, since).all<{ hour: number; n: number }>(),
     // Share of human visits that came from inside the Instagram in-app browser.
     env.DB.prepare(`SELECT COUNT(*) n FROM page_visits WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND is_ig_webview = 1`).bind(pageId, since).first<{ n: number }>(),
+    // CTR per device. The flat site-wide rate mixes two populations that behave
+    // nothing alike — over the 30 days to 2026-07-24, desktop converted at 4.4%
+    // and mobile at 10.7%, and desktop was two thirds of the denominator, so the
+    // blended 6.6% described neither. Split it and each number means something.
+    env.DB.prepare(
+      `SELECT d.device, d.visits, COALESCE(c.clicks, 0) clicks
+       FROM (SELECT device, COUNT(*) visits FROM page_visits
+             WHERE page_id = ? AND ts >= ? AND is_bot = 0 GROUP BY device) d
+       LEFT JOIN (SELECT device, COUNT(*) clicks FROM link_clicks
+                  WHERE page_id = ? AND ts >= ? GROUP BY device) c ON c.device = d.device
+       ORDER BY d.visits DESC`
+    ).bind(pageId, since, pageId, since).all<{ device: string; visits: number; clicks: number }>(),
+    // The number that actually answers "do people who arrive from the bio link
+    // tap the card". Clicks are attributed by visitor_hash, which is stable
+    // within a UTC day (hashVisitor folds the date in) — so this counts a tap
+    // from someone whose visit that day came through the Instagram webview. A
+    // visitor who lands before midnight and taps after is missed; at this
+    // traffic volume that's rarer than the distortion it removes.
+    env.DB.prepare(
+      `SELECT (SELECT COUNT(*) FROM page_visits
+               WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND is_ig_webview = 1) visits,
+              (SELECT COUNT(*) FROM link_clicks WHERE page_id = ? AND ts >= ? AND visitor_hash IN
+                (SELECT visitor_hash FROM page_visits
+                 WHERE page_id = ? AND ts >= ? AND is_bot = 0 AND is_ig_webview = 1)) clicks`
+    ).bind(pageId, since, pageId, since, pageId, since).first<{ visits: number; clicks: number }>(),
   ]);
 
   const totalClicks = clicksByLink.results.reduce((a, r) => a + r.n, 0);
@@ -196,6 +223,15 @@ export async function getAnalyticsSummary(env: Env, pageId: string, sinceDays = 
     uniqueHumanVisitors: uniqueHumans?.n ?? 0,
     totalClicks,
     clickThroughRate: humanN > 0 ? +(totalClicks / humanN * 100).toFixed(1) : 0,
+    // Prefer these two over clickThroughRate when judging whether the page
+    // works. The blended rate is kept for the daily series and back-compat.
+    ctrByDevice: ctrByDevice.results.map((r) => ({
+      ...r,
+      ctr: r.visits > 0 ? +((r.clicks / r.visits) * 100).toFixed(1) : 0,
+    })),
+    igVisits: igCohort?.visits ?? 0,
+    igClicks: igCohort?.clicks ?? 0,
+    igCtr: igCohort && igCohort.visits > 0 ? +((igCohort.clicks / igCohort.visits) * 100).toFixed(1) : 0,
     igWebviewVisits: igN,
     igSharePct: humanN > 0 ? +((igN / humanN) * 100).toFixed(1) : 0,
     clicksByLink: clicksByLink.results,

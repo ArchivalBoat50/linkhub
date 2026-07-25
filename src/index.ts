@@ -57,6 +57,9 @@ export default {
     if (path === "/robots.txt") {
       return handleRobots();
     }
+    if (path === "/optout") {
+      return handleOptOut(request, env, url);
+    }
     if (path === "/dashboard") {
       return new Response(renderDashboardShell(env.PAGE_ID, env.MODEL_NAME), {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
@@ -118,7 +121,7 @@ async function handleIndex(request: Request, env: Env, ctx: ExecutionContext, ur
   // `x=1` marks the page re-opening in Chrome after the load-time escape. It's
   // the same visitor continuing the same visit, already counted on the webview
   // hop — logging it again would double every escaped visit.
-  if (!url.searchParams.has("x")) {
+  if (!url.searchParams.has("x") && !hasOptOut(request)) {
     ctx.waitUntil(
       logVisit(env, {
         pageId: env.PAGE_ID,
@@ -202,7 +205,7 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
   const c = extractCtx(request, url);
   const escapeMark = url.searchParams.get(ESCAPED_PARAM);
 
-  if (escapeMark !== "a") {
+  if (escapeMark !== "a" && !hasOptOut(request)) {
     const visitorHash = await hashVisitor(c.ip, env.VISITOR_SALT || "dev-salt");
     ctx.waitUntil(
       logClick(env, {
@@ -369,6 +372,59 @@ function handleRobots(): Response {
   ].join("\n");
   return new Response(body, {
     headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=86400" },
+  });
+}
+
+// Own-device opt-out. Testing the escape means hammering the real page from a
+// real phone, and those hits land in the same tables as the audience — the
+// 30 days to 2026-07-24 carried 98 self-inflicted visits and 18 clicks against
+// ~19 real Instagram visits, which made igSharePct read 10.8% when the truth
+// was 2.2%. A visitor-hash blocklist can't fix it: hashVisitor() folds in the
+// calendar day, so the hash rotates every midnight (and again whenever a phone
+// changes IP). A cookie is the one marker that survives both.
+//
+// COOKIE JARS ARE PER-BROWSER, and the iOS escape deliberately moves the
+// visitor from the Instagram webview to Safari — two jars. Opting out in Safari
+// does NOT opt out the webview hop, so a full test device needs /optout run in
+// both. Belt and braces, since the webview hop is the one that logs on iOS.
+const OPTOUT_COOKIE = "lh_optout";
+
+function hasOptOut(request: Request): boolean {
+  const cookie = request.headers.get("Cookie") || "";
+  return new RegExp(`(?:^|;\\s*)${OPTOUT_COOKIE}=1(?:;|$)`).test(cookie);
+}
+
+// GET /optout?t=<ADMIN_TOKEN>          -> stop logging this browser
+// GET /optout?t=<ADMIN_TOKEN>&off=1    -> resume logging this browser
+//
+// Gated on ADMIN_TOKEN so a visitor can't quietly delete themselves from the
+// numbers. Deliberately NOT HttpOnly-exempt or cached anywhere.
+function handleOptOut(request: Request, env: Env, url: URL): Response {
+  if (!timingSafeEqual(url.searchParams.get("t") || "", env.ADMIN_TOKEN || "")) {
+    // Same bounce a crawler gets: /optout must not confirm it exists.
+    return new Response(renderBounce(), {
+      status: 404,
+      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
+
+  const off = url.searchParams.get("off") === "1";
+  const cookie = off
+    ? `${OPTOUT_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax; Secure; HttpOnly`
+    : `${OPTOUT_COOKIE}=1; Max-Age=63072000; Path=/; SameSite=Lax; Secure; HttpOnly`;
+
+  const body = off
+    ? "Logging RESUMED for this browser. Visits and clicks from here count again."
+    : "Logging STOPPED for this browser. Re-run with &off=1 to undo.\n\n" +
+      "This covers this browser only. The Instagram in-app webview keeps its own\n" +
+      "cookie jar, so run this inside the webview too if you test the escape.";
+
+  return new Response(body, {
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "set-cookie": cookie,
+    },
   });
 }
 

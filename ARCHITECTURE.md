@@ -669,7 +669,41 @@ If you purge again, **look at the rows before deleting** — `visitor_hash`
 collapses devices behind one IP (§6.2), so a hash is not guaranteed to be one
 person's phone.
 
+**2026-08-01 pass (§6.1) — what was verified, and how.**
+- `via` classification, end to end against a running Worker: no Referer →
+  `'direct'`; our own origin → `'page'`; `b=i` → `'escape'`; a foreign Referer
+  → `'direct'`. Six requests, five rows.
+- The dedupe: the sixth of those requests was the escape race (`b=i` then
+  `e=to` from one visitor) and correctly collapsed to a single row.
+- After deploy, one real `/go/vip` fetch with no Referer against production
+  landed as `'direct'` and did **not** raise the tap count. Zero NULL `via`
+  rows remain.
+- The analytics payload was read back at both 7 and 30 days and asserted for
+  rates above 100% — which is how the 160% desktop CTR was caught, since it
+  typechecks perfectly and only fails arithmetically.
+- **Rendered in a browser**, which caught the traffic chart flattening its two
+  signal series onto zero. `tsc` cannot see that, and neither can a test that
+  only reads the JSON.
+- Cloaking invariants re-checked on the live site post-deploy: bot page has no
+  `<script>`, no `.link-bar`, no `/go/` links; human page leaks no destination.
+
+**Testing the tap feedback:** the animation is hard to observe by clicking,
+since navigation starts immediately — freeze it from the console with
+`document.querySelector('.link-card').classList.add('loading')`. See the README
+for the LAN/phone recipe. The Instagram case cannot be tested without a deploy.
+
+**Before ANY test tap on the live site, run `/optout` in both jars.** This is
+the standing failure mode of this project, not a one-off: escape testing writes
+visits and clicks into the live tables from the exact cohort — Instagram,
+mobile — that the headline rate is computed over, so self-traffic inflates
+precisely the number being read. It has already happened twice (the 2026-07-25
+purge, and 2026-07-29's 9 visits / 8 taps which are still in the data because
+they are indistinguishable after the fact). §6.3.
+
 **Not yet tested (requires your account / a real domain):**
+- The tap feedback inside a real Instagram webview on a physical handset —
+  specifically that the press state and bar are visible during the escape's
+  1500ms hold, which is the whole reason they exist.
 - Behavior against a *real* `facebookexternalhit` hit with a real Meta ASN.
 - Link-preview rendering in the Facebook Sharing Debugger.
 - Cloudflare edge cache behavior under a custom domain.

@@ -118,6 +118,40 @@ curl -A "Mozilla/5.0 Chrome/120"  http://127.0.0.1:8787/            # human page
 curl -sD - -A "Mozilla/5.0 Chrome/120" http://127.0.0.1:8787/go/vip # 302 to real URL
 ```
 
+### Seeing the card tap feedback
+
+The press state and progress bar are hard to observe by clicking, because the
+navigation starts immediately and the animation is gone. Freeze them from the
+DevTools console instead:
+
+```js
+document.querySelector('.link-card').classList.add('tapped')    // press state
+document.querySelector('.link-card').classList.add('loading')   // progress bar
+document.querySelector('.link-card').className = 'link-card'    // reset
+```
+
+For real touch, bind the dev server to the LAN and open it from a phone on the
+same wifi — `npx wrangler dev --ip 0.0.0.0`, then `http://<your-lan-ip>:8788/`.
+Note that `/go/<id>` redirects to the **real** destination even in dev, so
+point the local `pages` row at a dummy URL if you want to tap it repeatedly.
+
+What none of the above can test is the case the feedback exists for: the
+Instagram in-app browser, where the escape's `preventDefault()` holds the
+visitor on the page for up to 1500ms. That needs the real domain in a real
+bio link, so it needs a deploy.
+
+### Run `/optout` before testing on the live site
+
+**Do this first, in both the normal browser and the Instagram in-app browser,
+every time you test on a real device.** Cookie jars are per-browser and on iOS
+the webview hop is the one that logs (§6.3). Skipping it is not a small
+measurement error: escape testing writes visits *and* clicks into the same
+tables the dashboard reads, from the exact cohort — Instagram, mobile — that
+the headline tap rate is computed over, so it inflates the one number you are
+trying to read. 2026-07-29 shows 9 Instagram visits and 8 taps in a single day,
+which is a test session wearing an audience's clothes, and nothing in the code
+can tell the two apart after the fact.
+
 ## Reusing for a second model
 
 Clone, change `src/config.ts` + `PAGE_ID` + `MODEL_NAME`, deploy under a

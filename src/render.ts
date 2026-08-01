@@ -113,6 +113,40 @@ const STYLE = `
   }
   .link-card::before { top: -8px; }
   .link-card::after { bottom: -8px; }
+  /* Tap feedback. The card is the only thing on this page a visitor is meant to
+     press, and the 302 + destination load can take a second on mobile data —
+     longer still on the Instagram escape path, which deliberately waits up to
+     1500ms before falling through. A card that looks inert for that long reads
+     as broken, and the tap gets repeated or abandoned. */
+  .link-card { transition: transform .13s ease, background-color .13s ease, border-color .13s ease; }
+  .link-card.tapped, .link-card.loading {
+    transform: scale(0.975);
+    background: #3A1F31;
+    border-color: rgba(201,161,90,0.42);
+  }
+  /* Inset from all four edges so no overflow:hidden is needed — the notch
+     circles above are ::before/::after positioned OUTSIDE the card border, and
+     clipping the card to hide a bar overflow would eat them. */
+  .link-bar {
+    position: absolute; left: 16px; right: 16px; bottom: 6px; height: 2px;
+    border-radius: 2px; background: var(--gold);
+    transform: scaleX(0); transform-origin: left center;
+    opacity: 0; pointer-events: none;
+  }
+  .link-card.loading .link-bar {
+    opacity: 1;
+    animation: lh-load 1.5s cubic-bezier(0.15,0.75,0.3,1) forwards;
+  }
+  /* Stops at 92% and holds. The bar cannot know when the destination has
+     loaded — we hand off to a 302 and the page goes away — so filling to 100%
+     would assert something we have not observed. Stalling just short reads as
+     "still working", which is true. */
+  @keyframes lh-load { from { transform: scaleX(0); } to { transform: scaleX(0.92); } }
+  @media (prefers-reduced-motion: reduce) {
+    .link-card { transition: none; }
+    .link-card.tapped, .link-card.loading { transform: none; }
+    .link-card.loading .link-bar { animation: none; opacity: 1; transform: scaleX(0.92); }
+  }
   .link-icon {
     width: 34px; height: 34px; border-radius: 50%; flex: none;
     background: rgba(201,161,90,0.12);
@@ -271,6 +305,7 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, igEscape = fals
         <div class="link-icon">${cardLogoHtml(l, false)}</div>
         <div class="link-label">${escapeHtml(l.label)}</div>
         <div class="link-arrow">&#8594;</div>
+        <span class="link-bar"></span>
       </a>`
     )
     .join("");
@@ -293,10 +328,53 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, igEscape = fals
     <div class="links" id="links">${linksHtml}</div>
     <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.modelName)}</p>
   </div>
-  ${igEscape ? IOS_ESCAPE_SCRIPT : ""}
+  ${TAP_FEEDBACK_SCRIPT}${igEscape ? IOS_ESCAPE_SCRIPT : ""}
 </body>
 </html>`;
 }
+
+// Tap feedback for the link cards. Emitted on every HUMAN page (the bot page
+// stays JS-free and its cards are inert `div`s with no bar element).
+//
+// Registered BEFORE the escape script on purpose. Both listen for `click` on
+// `#links`, and listeners on the same element fire in registration order — so
+// the card lights up first, and the escape's `preventDefault()` then holds the
+// visitor on this page for up to 1500ms with the bar already running. That
+// window is exactly the one that used to look like a dead tap.
+//
+// `:active` alone would not do this: iOS only applies it to a link when a touch
+// listener exists, and it drops the instant the escape moves focus to Safari,
+// which is when the feedback is most needed.
+//
+// pointerdown (not click) starts the press state so it lands on finger-down
+// rather than after the browser's click resolution. Release is deferred 150ms
+// so the press doesn't visibly flash off in the gap before `click` adds
+// `.loading` — which carries the same pressed styling, so the two hand over
+// without a pop.
+//
+// `pageshow` clears both classes because the Instagram escape leaves this page
+// alive in a background tab: without it, returning to the Instagram tab shows
+// a card frozen mid-load. It also covers bfcache back-navigation from the
+// destination, which is the ordinary way a visitor comes back.
+const TAP_FEEDBACK_SCRIPT = `<script>
+(function () {
+  var l = document.getElementById('links');
+  if (!l) return;
+  function card(e) { return e.target && e.target.closest ? e.target.closest('a.link-card') : null; }
+  l.addEventListener('pointerdown', function (e) { var a = card(e); if (a) a.classList.add('tapped'); });
+  function release(e) {
+    var a = card(e);
+    if (a) setTimeout(function () { a.classList.remove('tapped'); }, 150);
+  }
+  l.addEventListener('pointerup', release);
+  l.addEventListener('pointercancel', release);
+  l.addEventListener('click', function (e) { var a = card(e); if (a) a.classList.add('loading'); });
+  addEventListener('pageshow', function () {
+    var n = l.querySelectorAll('.tapped, .loading');
+    for (var i = 0; i < n.length; i++) { n[i].classList.remove('tapped'); n[i].classList.remove('loading'); }
+  });
+})();
+</script>`;
 
 // Instagram in-app-browser escape. Emitted ONLY for an Instagram webview
 // visitor, so every other page stays byte-identical (page weight is a
@@ -335,6 +413,15 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, igEscape = fals
 //    successful escape doesn't also fire the fallback. A refused escape must
 //    never cost the click.
 //
+//    THAT CANCELLATION IS A RACE, and it was losing. Both hops log by design —
+//    `b=i` is the only record of the tap when the escape works, `e=to` the only
+//    record when it doesn't — so if Safari opens without the webview firing
+//    visibilitychange inside 1500ms, one tap writes two rows. Two such pairs
+//    (1.7s and 3.7s apart, both Instagram mobile) were found in production. The
+//    timer now re-checks document.hidden at fire time, which closes the common
+//    case; the guarantee is server-side, in logClick()'s dedupe window, because
+//    no page-side guard survives a webview torn down mid-handoff.
+//
 // Keep comments OUT of the emitted string below — those bytes ship to every
 // Instagram visitor.
 const IOS_ESCAPE_SCRIPT = `<script>
@@ -359,6 +446,7 @@ const IOS_ESCAPE_SCRIPT = `<script>
     if (!path) return;
     e.preventDefault();
     var timer = setTimeout(function () {
+      if (document.hidden) return;
       location.href = path + (path.indexOf('?') > -1 ? '&' : '?') + 'e=to';
     }, 1500);
     function cancel() { clearTimeout(timer); }

@@ -3,7 +3,7 @@ import { renderBotPage, renderHumanPage, renderBounce } from "./render";
 import { renderDashboardShell } from "./dashboard";
 import { renderAdminShell } from "./admin";
 import { loadPageConfig, savePageConfig, ConfigValidationError } from "./page-store";
-import { Env, hashVisitor, parseUTM, logVisit, logClick, getAnalyticsSummary } from "./analytics";
+import { Env, ClickVia, hashVisitor, parseUTM, logVisit, logClick, getAnalyticsSummary } from "./analytics";
 
 // A request is "local dev" when it's coming through `wrangler dev`, where
 // request.cf.asn is usually absent. We relax the Meta-ASN check there so
@@ -216,6 +216,7 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
         referrer: c.referrer,
         utm: c.utm,
         visitorHash,
+        via: clickVia(c.referrer, url, escapeMark),
       })
     );
   }
@@ -241,6 +242,29 @@ async function handleGo(request: Request, env: Env, ctx: ExecutionContext, url: 
       "referrer-policy": "no-referrer",
     },
   });
+}
+
+// Did a human tap a card, or did something just fetch /go/<id>?
+//
+// A tap is a same-origin navigation from our own page, so it carries a Referer
+// naming our host — the page sets no referrer-policy, and same-origin
+// navigations send the full URL by default. A bare fetch carries none.
+//
+// The one genuine exception is the iOS escape: `instagram://extbrowser` hands
+// the URL to Safari, which opens it as a fresh navigation with NO Referer. That
+// hop is a real tap and looks exactly like a scraper on the Referer alone —
+// the `b=i` mark is the only thing that separates them, so it is checked first.
+//
+// Anything left over is 'direct'. That is not a small residue: before this
+// existed, 25 of 70 production rows were bare fetches counted as clicks.
+function clickVia(referrer: string | null, url: URL, escapeMark: string | null): ClickVia {
+  if (escapeMark === "i") return "escape";
+  if (!referrer) return "direct";
+  try {
+    return new URL(referrer).hostname === url.hostname ? "page" : "direct";
+  } catch {
+    return "direct";
+  }
 }
 
 // Marks the second hop of a webview escape: the request the real browser makes

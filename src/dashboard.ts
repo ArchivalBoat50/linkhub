@@ -65,6 +65,11 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
   .split-key { display:flex; gap:16px; margin-top:8px; font-size:12px; }
   .split-key span { display:flex; align-items:center; gap:6px; color:var(--dim); }
   .split-key .sw { width:10px; height:10px; border-radius:3px; }
+  .q-row { display:flex; align-items:baseline; gap:12px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .q-row:last-child { border-bottom:none; }
+  .q-n { font-size:18px; font-weight:700; min-width:56px; flex:none; text-align:right; font-variant-numeric:tabular-nums; }
+  .q-k { font-size:13px; }
+  .q-why { font-size:11px; color:var(--dim); margin-top:1px; }
 </style>
 </head>
 <body>
@@ -89,13 +94,18 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
     <div class="row" id="stats"></div>
 
     <div class="panel">
+      <h2>Traffic quality <span class="hint">what the headline numbers deliberately exclude</span></h2>
+      <div id="quality"></div>
+    </div>
+
+    <div class="panel">
       <h2>Traffic over time <span class="hint">tap a series to toggle</span></h2>
       <div class="chart-wrap"><div id="tsChart"></div></div>
     </div>
 
     <div class="grid2">
       <div class="panel">
-        <h2>Click-through rate over time <span class="hint">clicks ÷ visits</span></h2>
+        <h2>Click-through rate over time <span class="hint">taps ÷ attributed visits</span></h2>
         <div class="chart-wrap"><div id="ctrChart"></div></div>
       </div>
       <div class="panel">
@@ -126,12 +136,12 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
     </div>
 
     <div class="panel">
-      <h2>Click-through rate by device <span class="hint">the blended rate hides this</span></h2>
+      <h2>Click-through rate by device <span class="hint">taps ÷ attributed visits</span></h2>
       <div id="ctrByDevice"></div>
     </div>
 
     <div class="panel">
-      <h2>Clicks by link</h2>
+      <h2>Taps by link <span class="hint">bare /go/ fetches excluded</span></h2>
       <div id="clicksByLink"></div>
     </div>
 
@@ -176,6 +186,17 @@ function bars(container, rows, keyField) {
 
 function stat(n, l) {
   return '<div class="stat"><div class="n">' + n + '</div><div class="l">' + l + '</div></div>';
+}
+
+// ---- traffic-quality rows ----
+// Count + the reason that count is not in the headline. No bars: these aren't
+// a distribution to compare, they're four separate exclusions to read.
+function qualityRows(container, rows) {
+  container.innerHTML = rows.map(function (r) {
+    return '<div class="q-row"><div class="q-n">' + r.n + '</div>' +
+      '<div><div class="q-k">' + esc(r.k) + '</div>' +
+      '<div class="q-why">' + esc(r.why) + '</div></div></div>';
+  }).join('');
 }
 
 // ---- CTR per device ----
@@ -247,8 +268,13 @@ function lineChart(mountId, labels, series, opts) {
   var W = 720, H = 260, mL = 40, mR = 54, mT = 12, mB = 26;
   var plotW = W - mL - mR, plotH = H - mT - mB;
   var n = labels.length;
+  // A series may start hidden (s.off). Needed because raw visits and crawler
+  // hits are an order of magnitude larger than the two series that carry the
+  // signal — on a shared y-axis they flatten attributed visits and taps onto
+  // the zero line, which is precisely the misreading this dashboard exists to
+  // stop. They stay one legend tap away.
   var visible = {};
-  series.forEach(function (s) { visible[s.key] = visible[s.key] !== false; });
+  series.forEach(function (s) { visible[s.key] = !s.off; });
 
   var mount = document.getElementById(mountId);
   var tooltip = document.getElementById('tooltip');
@@ -436,30 +462,52 @@ function load() {
   }).then(function (d) {
     document.getElementById('gate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
-    document.getElementById('windowLabel').textContent = 'Last ' + d.windowDays + ' days';
+    // Name the actual first day. The window is day-aligned now, so "last 7
+    // days" is seven whole UTC days ending today and the label can prove it.
+    document.getElementById('windowLabel').textContent =
+      'Last ' + d.windowDays + ' days — since ' + d.windowStartDay + ' (UTC)';
 
-    // The Instagram tap rate leads because it is the only tile that answers
-    // "is the page working" — it counts the people who actually came from the
-    // bio link. The all-traffic rate sits next to it, dimmed, because desktop
-    // crawl-through inflates its denominator and drags it toward meaningless.
+    // Every tile up here describes the same population: people we can trace to
+    // a channel, and the taps they made. The Instagram rate leads because it is
+    // the tile that answers "is the page working" for the traffic the bio link
+    // actually sends. Raw visit counts, scanner traffic, crawlers and bare
+    // /go/ fetches are NOT here — they live in the quality panel below, where
+    // they can be read as diagnostics instead of quietly sitting in a
+    // denominator. The old blended "CTR, all traffic" tile is gone for exactly
+    // that reason: 1002 of 1253 "human" visits carried no referrer and no UTM,
+    // so it was measuring taps against scanners.
     document.getElementById('stats').innerHTML =
-      stat(d.humanVisits, 'Page visits') +
-      stat(d.uniqueHumanVisitors, 'Unique visitors') +
-      stat(d.totalClicks, 'Link clicks') +
       stat(d.igCtr + '% <span style="font-size:12px;color:var(--dim);font-weight:400">' +
            d.igClicks + '/' + d.igVisits + '</span>', 'IG tap rate') +
-      stat(d.clickThroughRate + '%', 'CTR, all traffic') +
-      stat(d.botVisits, 'Crawler hits');
+      stat(d.attributedCtr + '% <span style="font-size:12px;color:var(--dim);font-weight:400">' +
+           d.attributedClicks + '/' + d.attributedVisits + '</span>', 'CTR, attributed') +
+      stat(d.totalClicks, 'Link taps, all') +
+      stat(d.attributedVisits, 'Attributed visits') +
+      stat(d.uniqueHumanVisitors, 'Unique visitors');
+
+    // Diagnostics, not performance. Each row is traffic we removed from the
+    // numbers above, with the reason it was removed — so the headline dropping
+    // reads as a correction rather than as the funnel dying.
+    qualityRows(document.getElementById('quality'), [
+      { k: 'Unattributed visits', n: d.unattributedVisits,
+        why: 'no referrer, no UTM — scanner signature, excluded from CTR' },
+      { k: 'Direct /go/ fetches', n: d.directHits,
+        why: 'requested the redirect with the page never open — not taps' },
+      { k: 'Crawler hits', n: d.botVisits,
+        why: 'classified bots, served the link-free page' },
+      { k: 'Raw human visits', n: d.humanVisits,
+        why: 'everything the UA classifier let through, attributed or not' }
+    ]);
 
     ctrBars(document.getElementById('ctrByDevice'), d.ctrByDevice);
 
     var s = d.dailySeries || [];
     var labels = pluck(s, 'day');
     lineChart('tsChart', labels, [
-      { key: 'humans',  label: 'Page visits',    color: 'var(--s-visits)', values: pluck(s, 'humans') },
-      { key: 'uniques', label: 'Unique visitors', color: 'var(--s-unique)', values: pluck(s, 'uniques') },
-      { key: 'clicks',  label: 'Link clicks',    color: 'var(--s-clicks)', values: pluck(s, 'clicks') },
-      { key: 'bots',    label: 'Crawler hits',   color: 'var(--s-bots)',   values: pluck(s, 'bots') }
+      { key: 'attributed', label: 'Attributed visits', color: 'var(--s-visits)', values: pluck(s, 'attributed') },
+      { key: 'clicks',  label: 'Link taps',       color: 'var(--s-clicks)', values: pluck(s, 'clicks') },
+      { key: 'humans',  label: 'Raw visits',      color: 'var(--s-unique)', values: pluck(s, 'humans'), off: true },
+      { key: 'bots',    label: 'Crawler hits',    color: 'var(--s-bots)',   values: pluck(s, 'bots'), off: true }
     ], { toggle: true });
 
     lineChart('ctrChart', labels, [

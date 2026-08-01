@@ -35,11 +35,24 @@ lookup), browser, referrer, UTM params, human-vs-bot, and which crawler hit
 the safe page. Unique visitors use a salted **daily** hash of IP — never raw
 IP. View it at `/dashboard` (token-gated).
 
-**Judge the page on "IG tap rate" and the per-device CTR, not the headline
-"CTR, all traffic".** The blended rate divides by every human visit including
-desktop traffic that never came from the bio link, which drags it toward
-meaninglessness — it read 6.6% while the Instagram audience was converting at
-~32%. See ARCHITECTURE.md §6.1.
+**A "click" is a tap, not a request.** `link_clicks.via` separates a real card
+tap (`'page'`, or `'escape'` for the iOS hand-off to Safari, which legitimately
+arrives with no `Referer`) from a bare fetch of `/go/<id>` by something that
+never had the page open (`'direct'`). That distinction is not cosmetic: 25 of
+the first 70 rows were bare fetches. Only taps reach the headline count.
+
+**Every headline number describes one population.** Rates are computed over
+*attributed* visits — those carrying a UTM or a recognised platform referrer —
+with clicks matched back to the same visitors by `visitor_hash`. Raw visit
+counts, unattributed traffic, direct fetches and crawler hits are shown in a
+separate "Traffic quality" panel with the reason each is excluded, never in a
+denominator. The old blended "CTR, all traffic" is gone: it divided taps by
+1,253 human visits of which 1,002 had no referrer and no UTM. See
+ARCHITECTURE.md §6.1 — including why the cohort match is mandatory (without it
+the first cut reported a desktop CTR of 160%).
+
+Cross-checked against the destination platform' own tracking-link counter and the two agree
+within one click, so the tap → destination step is effectively lossless.
 
 **Exclude your own devices before you trust any of it.** Testing the in-app
 escape means loading the live page from a real phone, and those hits land in
@@ -62,6 +75,14 @@ npm run db:init:remote
 npx wrangler secret put DASHBOARD_TOKEN   # long random string
 npx wrangler secret put ADMIN_TOKEN       # a DIFFERENT long random string
 npx wrangler secret put VISITOR_SALT      # a THIRD long random string
+```
+
+`schema.sql` is current, so a fresh database needs nothing else. An **existing**
+deployment predating the `via` column must also run the migration once, which
+backfills historical rows as well as adding the column:
+
+```bash
+npm run db:migrate:remote
 ```
 
 **Save those tokens in a password manager as you set them.** Cloudflare

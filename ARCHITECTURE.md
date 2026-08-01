@@ -347,8 +347,11 @@ Three renderers, all returning HTML strings:
   link *labels* but **no hrefs/destinations**. Must look like a real page if
   inspected, never like a cloaking stub. Edge-cacheable.
 - `renderHumanPage` — same visual design; links are `<a href="/go/<id>">`.
-  No inline destinations, no JS needed. (The earlier JS `/api/resolve` +
-  `sendBeacon` approach was removed; see §2.)
+  No inline destinations. (The earlier JS `/api/resolve` + `sendBeacon`
+  approach was removed; see §2.) Carries `TAP_FEEDBACK_SCRIPT` — a ~0.5KB
+  press state + progress bar on the cards, added 2026-08-01. Navigation still
+  works without it: the card is a plain `<a>` and the script only adds classes,
+  so a JS failure costs the animation, never the click.
 - `renderBounce` — tiny meta-refresh-to-`/` page shown to crawlers that hit
   `/go/<id>`. No real URL.
 
@@ -484,8 +487,63 @@ Prefer these, added 2026-07-25:
   segment with visits and zero clicks still appears (as 0%) instead of
   vanishing from the list.
 
-`clickThroughRate` is retained for `dailySeries` and back-compat, and still
-renders on the dashboard, but is labelled "CTR, all traffic" and demoted.
+`clickThroughRate` is retained in the API payload for back-compat, but as of
+2026-08-01 it no longer renders anywhere on the dashboard — see below.
+
+#### The 2026-08-01 pass: a click count that was 36% not-clicks
+
+Auditing the 70 production `link_clicks` rows to explain "why only 26 clicks"
+turned up three separate reasons the number was wrong, in both directions.
+
+**1. `via` — taps vs. bare fetches.** 25 of 70 rows carried no `Referer` and
+no UTM: a direct request for `/go/vip` by something that never had the page
+open. The page sets no `referrer-policy`, so a genuine card tap is a
+same-origin navigation that *always* sends one. The one honest exception is
+the iOS escape hop, which Safari opens as a fresh navigation with no Referer —
+so the check is `b=i` first, Referer second. That ambiguity was resolved
+empirically before writing the rule: **zero** of the 25 belonged to a visitor
+with an Instagram webview visit that day, so none were escape hops.
+`link_clicks.via` is now `'page' | 'escape' | 'direct'`; only the first two
+count as taps. Backfilled by `migrations/0001-click-provenance.sql` (45 taps,
+25 direct, no NULLs left).
+
+**2. Double-logged iOS taps.** The card-tap escape arms a 1500ms fallback
+timer and both hops log by design (§3) — so a successful escape that doesn't
+hide the webview in time writes *two* rows for one tap. Two pairs, 1.7s and
+3.7s apart, were found in production. Fixed on both sides: the timer re-checks
+`document.hidden` at fire time, and `logClick()` drops a repeat of the same
+`(page_id, link_id, visitor_hash)` inside 10s. 10s and not 60s because
+`visitor_hash` folds in the IP and carrier CGNAT puts many real people behind
+one mobile IP — see §6.2.
+
+**3. The denominator was mostly scanners.** 1002 of 1253 human visits carried
+no referrer *and* no UTM; 838 were desktop against 414 mobile, on a bio link
+that is mobile-only; the geography skewed SG 176 / NL 57 / CN 33 / HK 15. So:
+
+- **`attributedVisits`** — human visits with a UTM or a recognised platform
+  referrer. **`unattributedVisits`** is the remainder, reported as a
+  diagnostic, never as a denominator.
+- **`attributedClicks` / `attributedCtr`** — taps by visitors *in that same
+  cohort*, matched by `visitor_hash` exactly as `igCtr` does. The cohort join
+  is not optional: the first cut of this divided all taps by attributed visits
+  and produced a **desktop CTR of 160%**, because desktop taps came
+  overwhelmingly from visitors whose arrival was never attributed. A rate whose
+  two sides describe different populations is not a rate.
+- `ctrByDevice` and `dailySeries.ctr` use the same cohort-matched pair.
+
+**Windows are day-aligned.** `windowStart()` returns UTC midnight of
+`(today - days + 1)`, so "last 7 days" is seven whole calendar days ending
+today. The old rolling `now - 7*86400` landed mid-day: the oldest bucket in
+every chart was a partial day drawn as a full one, and the same question asked
+twice in one afternoon gave two different totals.
+
+**Dashboard.** Headline tiles are now IG tap rate, CTR attributed, link taps,
+attributed visits, unique visitors — one population throughout. Raw visits,
+unattributed visits, direct fetches and crawler hits moved to a *Traffic
+quality* panel that states why each is excluded. In the traffic chart, raw
+visits and crawler hits default to hidden (`s.off`): they are an order of
+magnitude larger and flattened the two signal series onto the zero line —
+caught by rendering it, not by typechecking it.
 
 ### 6.2 `visitor_hash` is IP + day — what that costs you
 
@@ -882,3 +940,42 @@ but cannot perform these):
 - Honest read of the funnel at this date: ~19 real Instagram visits in 30 days
   converting at 31.6%, against 854 human visits total. Conversion is fine;
   arrivals are the constraint.
+
+**Update 2026-08-01.** Click provenance, tap dedupe, cohort-matched CTR and
+day-aligned windows shipped (§6.1). Production `link_clicks` migrated:
+`migrations/0001-click-provenance.sql` applied to remote D1, 70 rows
+classified 45 tap / 25 direct. What the 30-day window actually says now:
+
+| | before | after |
+|---|---|---|
+| "Link clicks" | 70 | **45 taps** (+25 direct fetches, reported separately) |
+| CTR headline | 5.6% blended | **39.4%** attributed (26/66) |
+| IG tap rate | 25/51 | 25/51, unchanged — it was already cohort-matched |
+| Desktop CTR | 3.8% of 838 visits | 10% of 10 attributed visits |
+
+**Cross-checked against the destination platform's own counter, and it agrees.** The destination
+is a tracking link (`destination.example/c1`), saved into the page config
+2026-07-18 01:59 UTC — so the destination platform's counter starts there, not at first traffic.
+Since that moment we issued 59 redirects, and the destination platform reports **26 clicks**. The
+gap is not leakage, it is the two classes this pass just learned to exclude:
+
+| our rows since `/c1` went live | n | reaches OF? |
+|---|---|---|
+| direct fetches (`via='direct'`) | 18 | no — nothing follows the 302 |
+| desktop taps | 14 | no — 13 of 14 from arrivals with no UTM and no IG referrer |
+| **mobile taps** | **27** (24 in the IG cohort) | **yes** |
+| less the two confirmed escape-race duplicates | **25** | |
+
+25–27 on our side against 26 on theirs. **The tap → OF-landing step is
+effectively lossless**, which is worth knowing: it means no future
+disappointment should be blamed on the redirect, the cloaking, or the escape.
+It also independently validates `via` and the dedupe window — two changes
+derived from our data alone that landed on a number a third party had already
+computed.
+
+Still open, and now the largest remaining source of error: `/optout` has not
+been run on the owner's test devices. 2026-07-29 alone shows 9 Instagram
+visits and 8 taps, which reads as a test session rather than an audience, and
+nothing in the code can tell the two apart. Until that is done, treat the
+Instagram tap rate as an upper bound. Arrivals remain the constraint: 31
+Instagram-webview visits in the last 7 days.

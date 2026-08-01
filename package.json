@@ -6,7 +6,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute linkhub-db --file=./schema.sql",
-    "db:init:remote": "wrangler d1 execute linkhub-db --remote --file=./schema.sql"
+    "db:init:remote": "wrangler d1 execute linkhub-db --remote --file=./schema.sql",
+    "db:migrate": "wrangler d1 execute linkhub-db --file=./migrations/0001-click-provenance.sql",
+    "db:migrate:remote": "wrangler d1 execute linkhub-db --remote --file=./migrations/0001-click-provenance.sql"
   },
   "devDependencies": {
     "wrangler": "^4.110.0",

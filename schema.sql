@@ -42,10 +42,18 @@ CREATE TABLE IF NOT EXISTS link_clicks (
   utm_source      TEXT,
   utm_medium      TEXT,
   utm_campaign    TEXT,
-  visitor_hash    TEXT
+  visitor_hash    TEXT,
+  -- How the request came to exist: 'page' (tapped a card, Referer is us),
+  -- 'escape' (the iOS b=i hop — a real tap that arrives with no Referer), or
+  -- 'direct' (something fetched /go/<id> with our page never open). Only the
+  -- first two are taps; see ClickVia in src/analytics.ts.
+  via             TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_visits_page_ts   ON page_visits(page_id, ts);
 CREATE INDEX IF NOT EXISTS idx_visits_bot       ON page_visits(page_id, is_bot, ts);
 CREATE INDEX IF NOT EXISTS idx_clicks_page_ts   ON link_clicks(page_id, ts);
 CREATE INDEX IF NOT EXISTS idx_clicks_link      ON link_clicks(page_id, link_id, ts);
+-- Serves logClick()'s dedupe lookup (page_id + link_id + visitor_hash + recent
+-- ts), which runs on every tap and must not degrade into a scan.
+CREATE INDEX IF NOT EXISTS idx_clicks_dedupe    ON link_clicks(page_id, link_id, visitor_hash, ts);

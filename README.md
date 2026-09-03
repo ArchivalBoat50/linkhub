@@ -2,30 +2,25 @@
 
 ## What this is, and the problem it solves
 
-A creator's Instagram bio link is the one place a follower can be sent
-off-platform, and it is also the thing Meta's integrity systems inspect. Meta's
-crawler fetches the bio-link page, parses its outbound links, and attributes the
-final destination back to the referring account; a page that resolves to a
-subscription platform — directly, or through a shared aggregator like Linktree —
-is a documented trigger for reduced reach or account action. Two further
-mechanisms compound it: every Linktree user shares one root domain, so a single
-domain carries the reputation of everyone behind it, and a landing page whose own
-text or images read as the flagged category is a content-moderation signal in its own
-right. linkhub replaces that page. Crawlers get a complete, legitimate-looking
-page with **no outbound destination links at all**; real visitors get an
-interactive page whose links point only back at the Worker; and the real
-destination is resolved server-side, per request, so it exists in exactly one
-place — the `Location` header of a `302` issued to a request classified as human.
-Without that split, the destination is one plain fetch away from anything that
-asks for it, and the account, not the page, pays for it.
+A link-in-bio page is a public URL fetched by everything: Meta's link-preview and
+crawler agents (facebookexternalhit, meta-externalagent), generic scrapers,
+link-checkers, and people. Hosted aggregators put every user on one shared domain
+and serialise every destination URL into the page HTML, so any fetch reveals
+where the links go, and the domain's reputation is shared with strangers. linkhub
+is a self-hosted alternative that runs as a single Cloudflare Worker. It
+classifies each request as human, Meta crawler, or generic bot using User-Agent
+matching plus Cloudflare ASN verification (a Meta user-agent arriving from a
+non-Meta ASN is treated as a bot, not a person). Crawlers get a complete static
+page with no outbound destinations; people get an interactive page whose links
+point back at the Worker; and destinations are resolved server-side per request,
+so the real URL exists in exactly one place: the Location header of a 302 issued
+to a request classified as human. Analytics live in D1 with salted daily IP
+hashing behind a token-gated dashboard; uploaded media in R2.
 
-Scope, stated plainly and preserved from the original design notes: this reduces
-detection risk. It does **not** eliminate platform ToS risk, and it does nothing
-about account-level signals — captions, hashtags, posted media, follow graph —
-which live upstream of any link infrastructure. It is one input into a
-per-account score, not a shield.
+Scope: this is link infrastructure. It controls what a fetch of the page reveals
+and nothing else.
 
-Full threat model, metric definitions and test record:
+Request classification model, metric definitions and test record:
 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## Architecture

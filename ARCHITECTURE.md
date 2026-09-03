@@ -7,7 +7,7 @@ both. Built for a single model per deploy today, with a data model that
 scales to multi-tenant later without migration.
 
 This document is the source of truth. It explains what every piece does,
-**why** it's built this way, what the threat model is, what has been tested,
+**why** it's built this way, how requests are classified, what has been tested,
 and what could still go wrong. If you're handing this to Claude Code or
 another dev, this file plus the source is everything needed.
 
@@ -15,53 +15,36 @@ another dev, this file plus the source is everything needed.
 
 ## 1. The problem being solved
 
-Instagram (Meta) programmatically inspects the destinations behind bio
-links. For accounts that route to platforms in a category the network penalises, a bio link that resolves — directly or through a shared
-aggregator like Linktree — to a flagged domain is a well-documented trigger
-for reduced reach (shadowban) or account action.
+A link-in-bio page is a public URL fetched by everything: Meta's link-preview
+and crawler agents (`facebookexternalhit`, `meta-externalagent`), generic
+scrapers, link-checkers, and people. Two properties of the hosted aggregators
+follow from that:
 
-Three distinct mechanisms drive this (see also the research notes the owner
-compiled separately):
+1. **Every destination is in the HTML.** A hosted aggregator serialises each
+   outbound URL into the page body, so any fetch — by anything, at any time —
+   returns the full list of where the links go. No classification happens; the
+   page has one body and it tells everyone the same thing.
+2. **The domain is shared.** Every Linktree user is on `linktr.ee`. Reputation
+   attached to that root domain is reputation you did not create and cannot
+   influence.
 
-1. **Recursive link-following.** Meta's crawler fetches the bio-link page
-   and its integrity systems parse the page's outbound links, attributing
-   the final destination back to the referring IG account.
-2. **Shared-domain reputation.** Every Linktree user shares `linktr.ee`.
-   Because a high concentration of penalised destinations sit behind
-   that one root domain, the domain itself carries elevated suspicion — one
-   user's clean page still lives on a "dirty" domain. (The July 2018
-   platform-wide Linktree ban is the canonical example of this failure mode.)
-3. **On-page text/image signals.** If the landing page's own visible text or
-   images read as the flagged category, that's a direct content-moderation flag,
-   independent of where the links go.
+**What this project does:** replaces that page with a self-hosted Worker on
+your own domain that classifies each request and serves a body appropriate to
+it.
 
-**What this project fixes:** all three of the above, but only the parts that
-originate from the link-in-bio page itself:
+- A crawler has nothing to follow — the crawler-facing page contains no
+  outbound destination links at all.
+- Destinations are resolved server-side per request and emitted only as a
+  `302 Location` header to a request classified as human.
+- The domain is yours, so its reputation is yours.
 
-- A crawler has nothing to recursively follow — the crawler-facing page
-  contains no outbound destination links at all.
-- You run your own domain with no other creators' history on it, so there's
-  no shared-domain guilt-by-association.
-- The crawler-facing page is deliberately clean (SFW text, neutral images).
-
-**What this project does NOT fix (be honest about scope):**
-
-- **Account-level content/behavior signals** — captions, hashtags, posted
-  images/video, follow graph, engagement patterns. These live on the IG
-  account, upstream of any link infrastructure. A clean link page does not
-  offset an account that already already reads as borderline.
-- **A domain that's already been blocklisted.** Once a domain is flagged,
-  this architecture doesn't un-flag it. It makes flagging less likely and
-  makes recovery cheap: rotate the domain (a config change), don't try to
-  clean it.
-- **Anything on the destination platform** after the click.
-
-This is one input into Meta's per-account scoring. It removes an input that
-was working against you. It is not a shield.
+**Scope.** This is link infrastructure. It controls what a fetch of the page
+reveals, and nothing else. It says nothing about, and does nothing for, the
+account that links to it or the platform on the far side of the click.
 
 ---
 
-## 2. Threat model (read this before changing anything)
+## 2. Request classification model (read this before changing anything)
 
 The whole design rests on one asymmetry:
 
@@ -166,7 +149,7 @@ scheme and opens them over `http://`, and the zone had no HTTPS redirect. It
 was found in the logs, not by inspection: the `Referer` on every recorded
 mobile tap read `http://example-links.com/`.
 
-The reason it matters is threat-model-level, not cosmetic: **the 302 carrying
+The reason it matters is classification-level, not cosmetic: **the 302 carrying
 the real destination was travelling unencrypted**, which hands the account →
 destination association to any observer on the network path — exactly the link
 this design exists to conceal. It also made `og:url` advertise `http://` to
@@ -277,7 +260,7 @@ turned out to be one HTTP fetch away.
    plain `http://` (Instagram opens bio links without a scheme; the zone had no
    HTTPS redirect), so `location.origin` was `http:` and the escapes were
    building `x-safari-**http**://`. Fixed by forcing HTTPS (§ above) — a real
-   threat-model hole in its own right — but the escape *still* failed once the
+   classification hole in its own right — but the escape *still* failed once the
    URL was clean, which finally ruled the scheme itself out.
 3. **Stopped guessing, built a probe.** A page (`/escape-test`) fired every
    candidate scheme at a URL on our own domain and let a working one *record its
@@ -734,9 +717,7 @@ npm run deploy
 
 Then:
 1. Attach a custom domain (Workers & Pages → your worker → Settings →
-   Domains & Routes). **Use a fresh domain with no history on the flagged category and
-   no other creators on it.** When a domain gets flagged, rotate it — don't
-   clean it.
+   Domains & Routes).
 2. Add the WAF ASN allow rule (§7) if Bot Fight Mode is on.
 3. Run the Facebook Sharing Debugger against your domain to confirm the
    preview renders from the bot page.
@@ -766,8 +747,8 @@ Nothing here blocks it; the shape is already right.
    links), `domain`, `created_at`.
 2. Replace the `pageConfig` import with a lookup keyed on request hostname or
    path prefix, cached in the Worker (or KV) to avoid a D1 read per request.
-3. Add an authenticated admin surface to create/edit pages and rotate domains
-   (rotation = update the `domain` field, repoint DNS).
+3. Add an authenticated admin surface to create/edit pages and manage their
+   domains (update the `domain` field, repoint DNS).
 4. Dashboard already accepts a `page` param and partitions all queries by it;
    just add a page picker and scope the token per page/account.
 
@@ -775,10 +756,9 @@ Nothing here blocks it; the shape is already right.
 
 ## 13. Known limitations / honest caveats
 
-- Detection-risk reducer, **not** a ToS-risk eliminator.
 - Classification can be fooled by a human-UA scraper; the URL-never-
-  serialized + server-side-redirect properties are what still protect you in
-  that case, but a JS-rendering Meta integrity crawler with a Meta ASN is the
+  serialized + server-side-redirect properties are what still hold in that
+  case, but a JS-rendering crawler with a human UA on a non-Meta ASN is the
   ceiling of this approach (§2).
 - Some external-research specifics (20-region verification, 30-day cache,
   "18 lines of injected JS", `.fbsv.net` PTR suffix) are unverified and were
@@ -808,7 +788,7 @@ Nothing here blocks it; the shape is already right.
 
 This section is written for a coding agent taking over the project. The owner
 (single developer) intends to grow this from a single-model page into a
-multi-tenant SaaS. Read §1–§13 first — especially §2 (threat model) and §5
+multi-tenant SaaS. Read §1–§13 first — especially §2 (request classification model) and §5
 (image cloaking) — because the security invariants there MUST survive every
 refactor below.
 
@@ -822,8 +802,8 @@ loses its reason to exist:
    a favicon src. Destinations live server-side and are only emitted as a
    `302 Location` header on a classified-human request to `/go/<id>`. (§2)
 2. **The crawler-facing page must carry no signal of the destination** — no
-   `/go` or `/icon` references, no real profile photo, no flagged-category text
-   or imagery. Bots get initials + gradient + glyphs only. (§5)
+   `/go` or `/icon` references, no real profile photo, no text or imagery
+   that identifies the destination. Bots get initials + gradient + glyphs only. (§5)
 3. **Per-account isolation** — once multi-tenant, one account's data, links,
    and analytics must never be reachable by another account. Every query
    stays partitioned (today by `page_id`; add `account_id` above it).
@@ -871,8 +851,8 @@ Current `/dashboard` is a minimal token-gated view. Goals:
 - Per-link click breakdown, device/country/referrer/UTM drilldowns (data
   already logged in `schema.sql`).
 - Bot-vs-human split visible (crawler pressure is already logged — surface
-  it, since it's genuinely useful for spotting when a domain is getting
-  scraped/flagged).
+  it, since it's genuinely useful for seeing how much automated traffic a
+  domain attracts).
 - Keep it framework-light or introduce a real frontend build step
   deliberately; today the dashboard is a self-contained HTML+JS string in
   `dashboard.ts`. If it grows, consider splitting the dashboard into its own
@@ -902,7 +882,7 @@ Current `/dashboard` is a minimal token-gated view. Goals:
 **Phase 3 — Admin surface (owner/developer only).**
 - A separate, strongly-gated area for the software owner (you) to: list all
   accounts, impersonate/inspect for support, see platform-wide metrics,
-  manage plans/billing state, and rotate/blocklist domains across accounts.
+  and manage plans/billing state.
 - This is a different trust tier from a normal user dashboard — gate it with
   Cloudflare Access or an allowlist of owner identities, separate from the
   end-user auth path. Never a shared "admin password" in the long run.
@@ -954,12 +934,10 @@ but cannot perform these):
 ### 14.4 Current live state (as of 2026-07-25)
 
 - Deployed as Worker `linkhub` on the custom domain **`example-links.com`**
-  (`wrangler.toml` `routes`). `workers.dev` is **disabled** — a shared,
-  non-rotatable domain must never front a bio link (§1, §14.4 reasoning
-  preserved in `wrangler.toml`). The domain is disposable by design: when it
-  gets flagged, register a clean one and swap it, rather than trying to
-  rehabilitate it.
-- One page, one model (`Ana` / `@examplecreator`), one link → the destination platform, resolved
+  (`wrangler.toml` `routes`). `workers.dev` is **disabled** — it is a shared
+  domain, which defeats the point of running your own (§1; reasoning preserved
+  in `wrangler.toml`).
+- One page, one model (`Ana` / `@examplecreator`), one link → the destination, resolved
   server-side via `/go/vip`.
 - Profile photo hosted in R2 and referenced via `avatarUrl`.
 - D1 database `linkhub-db` live with the §6 schema; analytics logging
@@ -993,14 +971,14 @@ is a tracking link (`destination.example/c1`), saved into the page config
 Since that moment we issued 59 redirects, and the destination platform reports **26 clicks**. The
 gap is not leakage, it is the two classes this pass just learned to exclude:
 
-| our rows since `/c1` went live | n | reaches OF? |
+| our rows since `/c1` went live | n | reaches the destination? |
 |---|---|---|
 | direct fetches (`via='direct'`) | 18 | no — nothing follows the 302 |
 | desktop taps | 14 | no — 13 of 14 from arrivals with no UTM and no IG referrer |
 | **mobile taps** | **27** (24 in the IG cohort) | **yes** |
 | less the two confirmed escape-race duplicates | **25** | |
 
-25–27 on our side against 26 on theirs. **The tap → OF-landing step is
+25–27 on our side against 26 on theirs. **The tap → destination-landing step is
 effectively lossless**, which is worth knowing: it means no future
 disappointment should be blamed on the redirect, the cloaking, or the escape.
 It also independently validates `via` and the dedupe window — two changes

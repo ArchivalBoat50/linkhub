@@ -1,0 +1,12 @@
+# Local development secrets for `wrangler dev`. Copy to .dev.vars and fill in.
+# .dev.vars is gitignored; in production these are set with `wrangler secret put NAME`.
+
+# Gates /dashboard. Any long random string: openssl rand -hex 32
+DASHBOARD_TOKEN=replace_me
+
+# Gates the admin API. Must differ from DASHBOARD_TOKEN.
+ADMIN_TOKEN=replace_me
+
+# Salt for the daily visitor hash. Rotating this deliberately breaks
+# cross-period visitor matching -- see ARCHITECTURE.md before changing it.
+VISITOR_SALT=replace_me

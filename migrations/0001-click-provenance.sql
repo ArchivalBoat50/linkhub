@@ -32,8 +32,8 @@ UPDATE link_clicks
    AND referrer <> ''
    AND (referrer LIKE 'http://example-links.com%'
      OR referrer LIKE 'https://example-links.com%'
-     OR referrer LIKE 'http://linkhub.xoascend.workers.dev%'
-     OR referrer LIKE 'https://linkhub.xoascend.workers.dev%');
+     OR referrer LIKE 'http://linkhub.<account>.workers.dev%'
+     OR referrer LIKE 'https://linkhub.<account>.workers.dev%');
 
 -- Everything else: no Referer, or one pointing somewhere we never served.
 -- Nobody had the page open — these were fetches, not taps.

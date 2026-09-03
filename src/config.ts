@@ -64,7 +64,7 @@ export interface PageConfig {
   // Never widen it to accept arbitrary CSS.
   backgroundPosition?: string;
 
-  ogDescription: string;       // shown in Instagram/Meta link previews — keep generic, nothing that reads as the flagged category
+  ogDescription: string;       // shown in link previews — keep generic; it is served to crawlers
   links: LinkItem[];
 }
 

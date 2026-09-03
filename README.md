@@ -149,7 +149,7 @@ Meta network check (no third-party ASN lookup, and not a spoofable header),
 `request.cf.country` for geography (no geo-IP vendor, no PII beyond a hashed IP),
 and edge execution, which matters because the page's entire job is one fast tap
 on cellular and the perf commit treats load time as the conversion metric.
-Beyond that: no servers to patch on a domain that is deliberately disposable, and
+Beyond that: no servers to patch, and
 domain rotation is a `wrangler.toml` change plus DNS rather than an
 infrastructure move. The costs are real and should be acknowledged in the same
 breath — D1 is SQLite with per-query latency on the hot path, there is no

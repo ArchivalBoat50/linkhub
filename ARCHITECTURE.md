@@ -934,9 +934,10 @@ but cannot perform these):
 ### 14.4 Current live state (as of 2026-07-25)
 
 - Deployed as Worker `linkhub` on the custom domain **`example-links.com`**
-  (`wrangler.toml` `routes`). `workers.dev` is **disabled** — it is a shared
-  domain, which defeats the point of running your own (§1; reasoning preserved
-  in `wrangler.toml`).
+  (`wrangler.toml` `routes`). `workers.dev` is **disabled**: `*.workers.dev` is
+  a shared domain, so reputation and rate limits are pooled across every tenant
+  on it. A link page should sit on a domain whose history you control (§1;
+  same reasoning recorded in `wrangler.toml`).
 - One page, one model (`Ana` / `@examplecreator`), one link → the destination, resolved
   server-side via `/go/vip`.
 - Profile photo hosted in R2 and referenced via `avatarUrl`.

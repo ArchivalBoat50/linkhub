@@ -1,10 +1,10 @@
-export function renderDashboardShell(pageId: string, modelName: string): string {
+export function renderDashboardShell(pageId: string, profileName: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${modelName} — Analytics</title>
+<title>${profileName} — Analytics</title>
 <style>
   :root {
     --bg:#14100F; --card:#1E1815; --card2:#241D19; --text:#F1EAE0; --dim:#9A8E82;
@@ -74,7 +74,7 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
 </head>
 <body>
   <div id="gate">
-    <h1>${modelName} — Analytics</h1>
+    <h1>${profileName} — Analytics</h1>
     <p class="sub">Enter dashboard token</p>
     <input type="password" id="token" placeholder="Token" />
     <button id="unlock">View</button>
@@ -82,7 +82,7 @@ export function renderDashboardShell(pageId: string, modelName: string): string 
   </div>
 
   <div id="app">
-    <h1>${modelName} — Analytics</h1>
+    <h1>${profileName} — Analytics</h1>
     <p class="sub" id="windowLabel"></p>
     <div class="row">
       <select id="days">

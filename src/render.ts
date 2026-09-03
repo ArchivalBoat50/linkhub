@@ -239,7 +239,7 @@ function backgroundHtml(cfg: PageConfig): string {
 function avatarHtml(cfg: PageConfig, forBot: boolean): string {
   // Bot page NEVER shows the real profile photo — initials only, always SFW.
   if (!forBot && cfg.avatarUrl) {
-    return `<div class="avatar"><img src="${escapeAttr(cfg.avatarUrl)}" alt="${escapeAttr(cfg.modelName)}" referrerpolicy="no-referrer"></div>`;
+    return `<div class="avatar"><img src="${escapeAttr(cfg.avatarUrl)}" alt="${escapeAttr(cfg.profileName)}" referrerpolicy="no-referrer"></div>`;
   }
   if (cfg.avatarInitials) {
     return `<div class="avatar">${escapeHtml(cfg.avatarInitials)}</div>`;
@@ -269,9 +269,9 @@ export function renderBotPage(cfg: PageConfig, canonicalUrl: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(cfg.modelName)}</title>
+<title>${escapeHtml(cfg.profileName)}</title>
 <meta name="description" content="${escapeAttr(cfg.ogDescription)}">
-<meta property="og:title" content="${escapeAttr(cfg.modelName)}">
+<meta property="og:title" content="${escapeAttr(cfg.profileName)}">
 <meta property="og:description" content="${escapeAttr(cfg.ogDescription)}">
 <meta property="og:type" content="profile">
 <meta property="og:url" content="${escapeAttr(canonicalUrl)}">
@@ -281,11 +281,11 @@ export function renderBotPage(cfg: PageConfig, canonicalUrl: string): string {
 <body>
   <div class="card">
     ${avatarHtml(cfg, true)}
-    <h1>${escapeHtml(cfg.modelName)}</h1>
+    <h1>${escapeHtml(cfg.profileName)}</h1>
     <p class="handle">${escapeHtml(cfg.handle)}</p>
     <p class="tagline">${escapeHtml(cfg.tagline)}</p>
     <div class="links">${linksHtml}</div>
-    <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.modelName)}</p>
+    <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.profileName)}</p>
   </div>
 </body>
 </html>`;
@@ -315,18 +315,18 @@ export function renderHumanPage(cfg: PageConfig, pageId: string, igEscape = fals
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(cfg.modelName)}</title>
+<title>${escapeHtml(cfg.profileName)}</title>
 <style>${STYLE}</style>
 </head>
 <body>
   ${backgroundHtml(cfg)}
   <div class="card">
     ${avatarHtml(cfg, false)}
-    <h1>${escapeHtml(cfg.modelName)}</h1>
+    <h1>${escapeHtml(cfg.profileName)}</h1>
     <p class="handle">${escapeHtml(cfg.handle)}</p>
     <p class="tagline">${escapeHtml(cfg.tagline)}</p>
     <div class="links" id="links">${linksHtml}</div>
-    <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.modelName)}</p>
+    <p class="foot">&copy; ${new Date().getFullYear()} ${escapeHtml(cfg.profileName)}</p>
   </div>
   ${TAP_FEEDBACK_SCRIPT}${igEscape ? IOS_ESCAPE_SCRIPT : ""}
 </body>

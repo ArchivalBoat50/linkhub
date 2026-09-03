@@ -61,7 +61,7 @@ export default {
       return handleOptOut(request, env, url);
     }
     if (path === "/dashboard") {
-      return new Response(renderDashboardShell(env.PAGE_ID, env.MODEL_NAME), {
+      return new Response(renderDashboardShell(env.PAGE_ID, env.PROFILE_NAME), {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
     }
@@ -69,7 +69,7 @@ export default {
       return handleAnalytics(request, env);
     }
     if (path === "/admin") {
-      return new Response(renderAdminShell(env.PAGE_ID, env.MODEL_NAME), {
+      return new Response(renderAdminShell(env.PAGE_ID, env.PROFILE_NAME), {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
     }

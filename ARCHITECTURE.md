@@ -3,7 +3,7 @@
 A self-hosted link-in-bio page for Cloudflare Workers + D1. It serves a
 clean, static, fully-legitimate page to Meta's crawlers and a real
 interactive link page to actual visitors, with server-side analytics on
-both. Built for a single model per deploy today, with a data model that
+both. Built for a single page per deploy today, with a data model that
 scales to multi-tenant later without migration.
 
 This document is the source of truth. It explains what every piece does,
@@ -318,7 +318,7 @@ only for localhost so `wrangler dev` testing isn't all `-unverified-asn`
 dimensions only — nothing security-relevant depends on them.
 
 ### `src/config.ts`
-Everything that differs between models: `modelName`, `handle`, `tagline`,
+Everything that differs between pages: `profileName`, `handle`, `tagline`,
 `avatarInitials`, `ogDescription`, and the `links` array (`id`, `label`,
 `url`, `icon`). `url` is the real destination — it is read only inside
 `/go/<id>` and never rendered into any page. For multi-tenant later, this
@@ -387,7 +387,7 @@ leak the destination:
 
 - **Profile picture (`avatarUrl`)** — shown on the HUMAN page only. The BOT
   page always renders the initials avatar, never the real photo. So a crawler
-  never sees the model's actual profile image, only clean initials. If
+  never sees the actual profile image, only clean initials. If
   `avatarUrl` is empty, both pages fall back to initials; if initials are
   also empty, the human page shows an "empty placeholder" tile.
 - **Background image (`backgroundUrl`)** — human page only, behind a dark
@@ -710,7 +710,7 @@ npx wrangler secret put DASHBOARD_TOKEN   # long random string
 npx wrangler secret put VISITOR_SALT      # a DIFFERENT long random string
 
 # edit src/config.ts (real name, bio, destination URLs)
-# edit wrangler.toml PAGE_ID + MODEL_NAME
+# edit wrangler.toml PAGE_ID + PROFILE_NAME
 
 npm run deploy
 ```
@@ -731,9 +731,9 @@ curl -sD - -A "Mozilla/5.0 Chrome/120" http://127.0.0.1:8787/go/vip   # 302
 
 ---
 
-## 11. Reusing for a second model (pre-multi-tenant)
+## 11. Reusing for a second page (pre-multi-tenant)
 
-Clone the repo, change `src/config.ts` + `PAGE_ID` + `MODEL_NAME`, deploy
+Clone the repo, change `src/config.ts` + `PAGE_ID` + `PROFILE_NAME`, deploy
 under a different domain. You can point multiple deployed Workers at one
 shared D1 database (every row is `page_id`-partitioned), which also
 pre-populates the multi-tenant dashboard.
@@ -787,7 +787,7 @@ Nothing here blocks it; the shape is already right.
 ## 14. Product roadmap & handoff notes (for Claude Code / Codex / Cursor)
 
 This section is written for a coding agent taking over the project. The owner
-(single developer) intends to grow this from a single-model page into a
+(single developer) intends to grow this from a single page into a
 multi-tenant SaaS. Read §1–§13 first — especially §2 (request classification model) and §5
 (image cloaking) — because the security invariants there MUST survive every
 refactor below.
@@ -938,7 +938,7 @@ but cannot perform these):
   a shared domain, so reputation and rate limits are pooled across every tenant
   on it. A link page should sit on a domain whose history you control (§1;
   same reasoning recorded in `wrangler.toml`).
-- One page, one model (`Ana` / `@examplecreator`), one link → the destination, resolved
+- One page, one profile (`Ana` / `@examplecreator`), one link → the destination, resolved
   server-side via `/go/vip`.
 - Profile photo hosted in R2 and referenced via `avatarUrl`.
 - D1 database `linkhub-db` live with the §6 schema; analytics logging

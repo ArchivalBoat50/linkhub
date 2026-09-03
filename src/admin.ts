@@ -17,13 +17,13 @@
 // video/photo and avatar are still rendered by render.ts on the HUMAN page
 // only — the bot page never emits them.
 
-export function renderAdminShell(pageId: string, modelName: string): string {
+export function renderAdminShell(pageId: string, profileName: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(modelName)} — Admin</title>
+<title>${escapeHtml(profileName)} — Admin</title>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -183,7 +183,7 @@ export function renderAdminShell(pageId: string, modelName: string): string {
 </head>
 <body>
   <div id="gate">
-    <h1>${escapeHtml(modelName)} — Admin</h1>
+    <h1>${escapeHtml(profileName)} — Admin</h1>
     <p class="sub">Enter admin token</p>
     <input type="password" id="token" placeholder="Token" />
     <button class="primary" id="unlock">Unlock</button>
@@ -214,7 +214,7 @@ export function renderAdminShell(pageId: string, modelName: string): string {
       <div id="bannerSlot"></div>
       <div class="stage-content">
         <div class="avatar-wrap" id="avatarWrap"></div>
-        <div class="ed name" contenteditable="true" data-field="modelName" data-ph="Display name"></div>
+        <div class="ed name" contenteditable="true" data-field="profileName" data-ph="Display name"></div>
         <div class="ed handle" contenteditable="true" data-field="handle" data-ph="@handle"></div>
         <div class="ed tagline" contenteditable="true" data-field="tagline" data-ph="Short tagline"></div>
         <div class="links" id="stageLinks"></div>

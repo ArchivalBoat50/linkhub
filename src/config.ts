@@ -31,7 +31,7 @@ export type BackgroundType = "none" | "banner" | "full";
 export type BackgroundMediaType = "image" | "video";
 
 export interface PageConfig {
-  modelName: string;          // shown to bots / in OG tags — keep this brand-neutral and clean
+  profileName: string;        // shown to bots / in OG tags — keep this brand-neutral and clean
   handle: string;              // e.g. "@yourhandle" shown on the page
   tagline: string;             // short line under the name, SFW
   avatarInitials: string;      // fallback avatar text if no avatarUrl is set
@@ -69,7 +69,7 @@ export interface PageConfig {
 }
 
 export const pageConfig: PageConfig = {
-  modelName: "Ana",
+  profileName: "Ana",
   handle: "@examplecreator",
   tagline: "New drops every week — tap in below",
   avatarInitials: "M",

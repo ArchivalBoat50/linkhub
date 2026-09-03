@@ -1,7 +1,7 @@
 export interface Env {
   DB: D1Database;
   PAGE_ID: string;
-  MODEL_NAME: string;
+  PROFILE_NAME: string;
   DASHBOARD_TOKEN: string;
   VISITOR_SALT: string;
   // Admin surface (see src/admin.ts). Token gate for /api/admin/*.

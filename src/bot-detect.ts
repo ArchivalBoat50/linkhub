@@ -11,7 +11,7 @@
 //   serializes a real URL into any client-readable response, and (b) does
 //   every redirect server-side through /go/<id>. Classification decides who
 //   gets the clean bounce vs. the real redirect; it is one layer, not the
-//   only one. See ARCHITECTURE.md "Threat model" for the full reasoning.
+//   only one. See ARCHITECTURE.md "Request classification model" for the full reasoning.
 //
 // ASN cross-check: a UA claiming to be a Meta crawler is only marked
 // "verified" when request.cf.asn === 32934 (Meta's network). A Meta-looking

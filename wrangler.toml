@@ -11,7 +11,7 @@ routes = [
   { pattern = "example-links.com", custom_domain = true }
 ]
 
-# One Worker deploy = one model's page for now (per-model deploy, per your call).
+# One Worker deploy = one page for now (per-page deploy).
 # When you go multi-tenant later, this same schema already supports it —
 # just add a router keyed on hostname/path and stop hardcoding PAGE_ID.
 
@@ -21,8 +21,9 @@ database_name = "linkhub-db"
 database_id = "e09a9f33-0d7a-40c6-9be3-9a5018cdbfa2"  # `wrangler d1 create linkhub-db` then paste the id here
 
 [vars]
-PAGE_ID = "model-1"          # unique slug for this model's page, used as the analytics partition key
-MODEL_NAME = "Ana"          # shown in OG tags for the bot-safe page
+PAGE_ID = "model-1"          # unique slug for this page, used as the analytics partition key.
+                             # Value is the deployed one -- changing it repartitions analytics.
+PROFILE_NAME = "Ana"        # shown in OG tags for the bot-safe page
 
 # Secrets — set with `wrangler secret put <NAME>`, do not put real values here:
 #   DASHBOARD_TOKEN   -> bearer token to view /dashboard and /api/analytics

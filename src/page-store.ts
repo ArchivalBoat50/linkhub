@@ -99,8 +99,12 @@ export function validateConfig(raw: unknown): ValidateResult {
   const r = raw as Record<string, unknown>;
 
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-  const modelName = str(r.modelName);
-  if (!modelName) return { ok: false, error: "modelName is required" };
+  // `profileName` was called `modelName` before the rename. Rows already in D1
+  // still carry the old key, and this function is what reads them back, so it
+  // accepts either and writes the new one. Drop the fallback once the stored
+  // rows have been migrated.
+  const profileName = str(r.profileName) || str(r.modelName);
+  if (!profileName) return { ok: false, error: "profileName is required" };
 
   const linksRaw = r.links;
   if (!Array.isArray(linksRaw)) return { ok: false, error: "links must be an array" };
@@ -167,10 +171,10 @@ export function validateConfig(raw: unknown): ValidateResult {
   const backgroundPosition = normalizePosition(str(r.backgroundPosition));
 
   const config: PageConfig = {
-    modelName,
+    profileName,
     handle: str(r.handle),
     tagline: str(r.tagline),
-    avatarInitials: str(r.avatarInitials) || modelName.slice(0, 1).toUpperCase(),
+    avatarInitials: str(r.avatarInitials) || profileName.slice(0, 1).toUpperCase(),
     avatarUrl,
     backgroundUrl,
     backgroundType,
